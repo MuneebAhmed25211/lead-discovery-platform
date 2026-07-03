@@ -2,24 +2,11 @@
 schemas/discovery.py
 ────────────────────
 Pydantic schemas for the Discovery Engine (Phase 3).
-
-Three layers of types live here:
-
-  1. Provider-level:   SearchResult — what a single provider call returns
-                        before normalization or deduplication.
-
-  2. Service-level:     DiscoveredCompany — a normalized, deduplicated
-                        candidate as stored in `discovered_companies`.
-
-  3. API-level:         DiscoveryRequest / DiscoveryResponse — the HTTP
-                        contract for POST /api/v1/discovery/search.
-
-This file has no dependency on the provider implementations themselves —
-providers import FROM here, not the other way around.
 """
 
 from __future__ import annotations
 
+import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -83,7 +70,7 @@ class DiscoveredCompany(AppBaseModel):
     `domain` is the identity key — see utils/dedup.py for normalization rules.
     """
 
-    id: str = Field(default_factory=lambda: str(__import__("uuid").uuid4()))
+    id: str = Field(default_factory=lambda: str(_uuid.uuid4()))
     search_id: str
     icp_id: str
     name: str

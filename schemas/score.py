@@ -129,11 +129,32 @@ class LeadScoreRecord(UUIDModel):
 # ── API Request/Response ──────────────────────────────────────────────────────
 
 class ScoreRequest(AppBaseModel):
-    """POST /api/v1/scoring/score"""
+    """POST /api/v1/scoring/score — score one company against one ICP."""
     company_id: str
+    icp_id: str
+
+
+class ScoreBatchRequest(AppBaseModel):
+    """POST /api/v1/scoring/batch — score all complete companies for a search."""
+    search_id: str
+    icp_id: str
+    min_research_confidence: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Skip companies whose data_confidence is below this threshold.",
+    )
 
 
 class ScoreResponse(AppBaseModel):
     """Response after scoring a company."""
     score: LeadScore
     cached: bool = False
+
+
+class ScoreBatchResponse(AppBaseModel):
+    """Response after batch scoring."""
+    scored: int
+    skipped: int
+    total: int
+    scores: list[LeadScore]

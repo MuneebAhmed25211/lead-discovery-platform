@@ -83,7 +83,7 @@ def health_check() -> dict[str, str]:
     try:
         client = get_service_client()
         # A lightweight query — just fetch the server time
-        client.rpc("now").execute()
+        client.table("companies").select("*").limit(1).execute()
         return {"status": "ok"}
     except Exception as exc:
         logger.warning("supabase_health_check_failed", error=str(exc))

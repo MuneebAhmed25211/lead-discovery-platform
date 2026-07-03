@@ -44,7 +44,7 @@ from schemas.discovery import (
     SearchResult,
 )
 from utils.dedup import extract_domain, root_domain
-from utils.validator import validate_candidate
+from utils.validator import negative_site_filters, validate_candidate
 
 logger = get_logger(__name__)
 
@@ -75,7 +75,16 @@ class DiscoveryService:
 
         outcomes: list[ProviderSearchOutcome] = []
         for query in search_queries[:_MAX_QUERIES_PER_DISCOVERY]:
-            outcome = await self._router.search(query, num_results=_RESULTS_PER_QUERY)
+            # Append a compact "-site:" exclusion suffix so the search
+            # provider itself filters out the highest-volume noise sources
+            # (job boards, staffing agencies, press-release wires) before
+            # they ever reach validation. The ICP-authored query is kept
+            # unmodified for outcome.query / matched_query — see below —
+            # so candidate provenance in the UI/logs stays human-readable
+            # rather than showing the raw exclusion suffix.
+            augmented_query = f"{query} {negative_site_filters()}"
+            outcome = await self._router.search(augmented_query, num_results=_RESULTS_PER_QUERY)
+            outcome.query = query
             outcomes.append(outcome)
 
         candidates = self._validate_and_dedupe(
@@ -248,9 +257,15 @@ class DiscoveryService:
         """
         Upsert candidates into discovered_companies.
 
-        IDs are pre-generated on the DiscoveredCompany objects, so even if
-        the DB upsert fails and we fall back to returning in-memory candidates,
-        every returned object has a real, non-empty UUID.
+        IDs are pre-generated on the DiscoveredCompany objects before this
+        call, so the in-memory list is the authoritative return value.
+
+        We write to Supabase and log any failure, but always return the
+        in-memory candidates — their UUIDs are already set and valid.
+
+        NOTE: Supabase PostgREST does not return rows from upsert by default
+        (result.data == []). We do NOT rely on result.data for our return
+        value — we use the pre-built in-memory candidates directly.
         """
         if not candidates:
             return []
@@ -258,7 +273,7 @@ class DiscoveryService:
         now = datetime.now(timezone.utc).isoformat()
         rows = [
             {
-                "id": c.id,              # pre-generated UUID — never empty
+                "id": c.id,
                 "search_id": c.search_id,
                 "icp_id": c.icp_id,
                 "name": c.name,
@@ -275,49 +290,24 @@ class DiscoveryService:
         ]
 
         try:
-            result = (
-                self._db.table("discovered_companies")
-                .upsert(rows, on_conflict="search_id,domain")
-                .execute()
+            self._db.table("discovered_companies").upsert(
+                rows, on_conflict="search_id,domain"
+            ).execute()
+            logger.info(
+                "discovery_persisted",
+                count=len(rows),
             )
         except Exception as exc:
+            # Log the real error so it's visible — this is the most common
+            # source of the "companies not in DB" bug.
             logger.error(
                 "discovery_persist_failed",
                 error=str(exc),
                 candidate_count=len(candidates),
             )
-            # In-memory candidates already have real UUIDs — safe to return
-            return candidates
+            # Still return in-memory candidates — they have valid IDs and
+            # the API response will be correct even if DB write failed.
 
-        # Build return list from DB response rows; fall back to in-memory
-        # candidates (which already have pre-generated IDs) if DB returned nothing.
-        if result.data:
-            persisted: list[DiscoveredCompany] = []
-            for row in result.data:
-                persisted.append(
-                    DiscoveredCompany(
-                        id=row["id"],
-                        search_id=row["search_id"],
-                        icp_id=row["icp_id"],
-                        name=row["name"],
-                        domain=row["domain"],
-                        website=row["website"],
-                        source_url=row["source_url"],
-                        snippet=row["snippet"],
-                        provider=row["provider"],
-                        matched_query=row["matched_query"],
-                        linkedin_url=row.get("linkedin_url", ""),
-                        discovered_at=row["discovered_at"],
-                    )
-                )
-            return persisted
-
-        # DB returned no rows (can happen with certain Supabase upsert configs)
-        # — return in-memory candidates, which already have real pre-generated IDs.
-        logger.warning(
-            "discovery_persist_no_rows_returned",
-            candidate_count=len(candidates),
-        )
         return candidates
 
 

@@ -95,6 +95,9 @@ class Company(AppBaseModel):
         description="e.g. {'linkedin': 'https://...', 'twitter': 'https://...'}"
     )
     contact_pages: list[str] = Field(default_factory=list)
+    contact_emails: list[str] = Field(default_factory=list)
+    contact_phones: list[str] = Field(default_factory=list)
+    booking_detected: bool = False
 
     # Trust metadata
     p1_pages_crawled: list[str] = Field(default_factory=list)
@@ -144,6 +147,9 @@ class CompanyRecord(UUIDModel, TimestampedModel):
     job_titles_found: list[str]
     social_profiles: dict
     contact_pages: list[str]
+    contact_emails: list[str]
+    contact_phones: list[str]
+    booking_detected: bool
     p1_pages_crawled: list[str]
     p1_pages_failed: list[str]
     data_confidence: float
@@ -154,15 +160,20 @@ class CompanyRecord(UUIDModel, TimestampedModel):
 # ── API Request/Response ──────────────────────────────────────────────────────
 
 class ResearchRequest(AppBaseModel):
-    """POST /api/v1/research/company"""
+    """POST /api/v1/research/company — research a single discovered company."""
 
-    company_id: str
-    domain: str
-    website: str
+    discovered_company_id: str = Field(..., description="UUID from discovered_companies table")
+
+
+class ResearchBatchRequest(AppBaseModel):
+    """POST /api/v1/research/batch — research all unpromoted candidates for a search."""
+
+    search_id: str
+    max_companies: int = Field(default=20, ge=1, le=50)
 
 
 class ResearchResponse(AppBaseModel):
-    """Response after researching a company."""
+    """Response after researching a single company."""
 
     company: Company
     evidence_count: int

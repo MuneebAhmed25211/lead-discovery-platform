@@ -18,6 +18,7 @@ Timeout and retry behavior:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -30,6 +31,22 @@ from schemas.discovery import SearchResult
 logger = get_logger(__name__)
 
 _TAVILY_URL = "https://api.tavily.com/search"
+
+# Discovery (services/discovery_service.py) appends Google-style
+# "-site:domain" exclusion tokens to every outbound query as deterministic
+# noise suppression (see utils/validator.py's negative_site_filters()).
+# Serper genuinely proxies Google search, so it parses "-site:" natively.
+# Tavily does NOT — it is a semantic/AI search API operating on natural-
+# language text, so a literal "-site:domain" token left in the query
+# string is not interpreted as an exclusion; it is just noise fed into
+# the semantic match. Confirmed by production evidence: every result in
+# a real discovery run came back via Tavily fallback (provider=="tavily"
+# on 100% of returned candidates), and none of the seven domains in the
+# exclusion list were actually suppressed. Tavily's REST API does support
+# domain exclusion natively via a dedicated "exclude_domains" array
+# parameter, so this strips the tokens out of the query text and passes
+# them through that parameter instead.
+_SITE_EXCLUSION_PATTERN = re.compile(r"-site:(\S+)")
 
 
 class TavilyProvider(SearchProvider):
@@ -44,14 +61,20 @@ class TavilyProvider(SearchProvider):
         if not self._api_key:
             raise SearchProviderError(self.name, "TAVILY_API_KEY is not configured")
 
-        payload = {
+        exclude_domains = _SITE_EXCLUSION_PATTERN.findall(query)
+        clean_query = _SITE_EXCLUSION_PATTERN.sub("", query)
+        clean_query = re.sub(r"\s+", " ", clean_query).strip() or query
+
+        payload: dict[str, Any] = {
             "api_key": self._api_key,
-            "query": query,
+            "query": clean_query,
             "max_results": min(num_results, 20),
             "search_depth": "basic",
             "include_answer": False,
             "include_raw_content": False,
         }
+        if exclude_domains:
+            payload["exclude_domains"] = exclude_domains
 
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:

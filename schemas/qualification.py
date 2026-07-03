@@ -149,6 +149,19 @@ class OutreachRecord(UUIDModel):
 class QualifyRequest(AppBaseModel):
     """POST /api/v1/qualify/company"""
     company_id: str
+    icp_id: str
+
+
+class QualifyBatchRequest(AppBaseModel):
+    """POST /api/v1/qualify/batch — qualify all scored companies above threshold."""
+    search_id: str
+    icp_id: str
+    min_score: int = Field(
+        default=60,
+        ge=0,
+        le=100,
+        description="Only qualify companies with total_score >= min_score.",
+    )
 
 
 class QualifyResponse(AppBaseModel):
