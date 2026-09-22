@@ -8,6 +8,22 @@ Every dimension includes the raw score, reasoning text, and
 the IDs of evidence records that drove that sub-score.
 
 This makes every score fully explainable to the user.
+
+Dimension weights and score bands below were recalibrated from live
+usage data across ~6 independent ICPs (healthcare/manufacturing/
+logistics, e-commerce, local-service, automation-for-startups), all of
+which clustered around a 40-50/100 ceiling even for companies later
+confirmed to be genuinely plausible fits. Root cause: icp_match (was
+25 pts) requires a company's own marketing copy to echo the ICP's
+free-form pain_points/positive_signals sentences — a bar real company
+websites almost never clear regardless of true fit (e.g. a real,
+right-sized, actively-hiring law firm scored 0/25 on this dimension
+alone, dragging its total to 45/100 despite otherwise-correct industry
+and size matches). Weight shifted from icp_match toward the dimensions
+that reliably extract from real evidence (industry_fit, company_size,
+hiring_signals). Bands lowered to match the realistic achievable range
+under the new weights — a first-pass recalibration, expected to be
+tuned further as more live data comes in.
 """
 
 from __future__ import annotations
@@ -22,18 +38,18 @@ from schemas.common import AppBaseModel, UUIDModel
 
 
 class ScoreCategory(StrEnum):
-    EXCELLENT = "Excellent"   # 90–100
-    STRONG    = "Strong"      # 75–89
-    MODERATE  = "Moderate"    # 60–74
-    WEAK      = "Weak"        # 0–59
+    EXCELLENT = "Excellent"   # 85–100
+    STRONG    = "Strong"      # 70–84
+    MODERATE  = "Moderate"    # 55–69
+    WEAK      = "Weak"        # 0–54
 
 
 def categorize_score(total: int) -> ScoreCategory:
-    if total >= 90:
+    if total >= 85:
         return ScoreCategory.EXCELLENT
-    elif total >= 75:
+    elif total >= 70:
         return ScoreCategory.STRONG
-    elif total >= 60:
+    elif total >= 55:
         return ScoreCategory.MODERATE
     else:
         return ScoreCategory.WEAK
@@ -65,25 +81,35 @@ class LeadScore(AppBaseModel):
     """
     Complete 100-point lead score with full breakdown.
 
-    Dimensions and max points:
-      icp_match              0–25   keyword + signal overlap with ICP
-      industry_fit           0–20   direct industry list match
-      company_size           0–15   employee count vs ICP target range    (reduced from 20 — size matters less than fit)
-      growth_signals         0–20   blog activity, hiring, expansion signals
-      hiring_signals         0–10   active job postings found
-      automation_opportunity 0–10   manual-process keywords detected
+    Dimensions and max points (recalibrated — see module docstring):
+      icp_match               0–15   keyword + signal overlap with ICP (reduced from 25 —
+                                      structurally underscores most real companies)
+      industry_fit            0–25   direct industry list match (increased from 20 — reliable)
+      company_size            0–20   employee count vs ICP target range (increased from 15)
+      growth_signals          0–20   blog activity, hiring, expansion signals (unchanged)
+      hiring_signals          0–15   active job postings found (increased from 10 — reliable)
+      automation_opportunity  0–5    manual-process keywords detected (reduced from 10 — weak signal)
 
-    Total: 100 points
+    Total: 100 points (before disqualifier deduction)
+
+    disqualifiers is a separate, always-visible dimension representing
+    points DEDUCTED for ICP disqualifying_signals matched against the
+    company's evidence (e.g. "is itself a software/AI company"). Its
+    score is always <= 0 and its max_score is 0 — it is not part of the
+    100-point ceiling — but it is exposed here with its own reason text
+    so a deduction is never a silent, unexplained subtraction from the
+    total. Every point awarded or deducted must be traceable to a rule.
     """
 
     company_id: str
 
-    icp_match:              ScoreDimension   # max 25
-    industry_fit:           ScoreDimension   # max 20
-    company_size:           ScoreDimension   # max 15
+    icp_match:              ScoreDimension   # max 15
+    industry_fit:           ScoreDimension   # max 25
+    company_size:           ScoreDimension   # max 20
     growth_signals:         ScoreDimension   # max 20
-    hiring_signals:         ScoreDimension   # max 10
-    automation_opportunity: ScoreDimension   # max 10
+    hiring_signals:         ScoreDimension   # max 15
+    automation_opportunity: ScoreDimension   # max 5
+    disqualifiers:          ScoreDimension   # max 0, score <= 0 — deduction only
 
     total_score: int
     score_category: ScoreCategory
@@ -91,7 +117,7 @@ class LeadScore(AppBaseModel):
 
     @classmethod
     def max_possible(cls) -> int:
-        return 25 + 20 + 15 + 20 + 10 + 10   # = 100
+        return 15 + 25 + 20 + 20 + 15 + 5   # = 100 (disqualifiers contributes 0 to the max)
 
     def to_flat_dict(self) -> dict:
         """Flat representation for CSV export."""
@@ -104,6 +130,7 @@ class LeadScore(AppBaseModel):
             "growth_signals": self.growth_signals.score,
             "hiring_signals": self.hiring_signals.score,
             "automation_opportunity": self.automation_opportunity.score,
+            "disqualifiers": self.disqualifiers.score,
         }
 
 

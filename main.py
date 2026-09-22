@@ -88,10 +88,19 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── Middleware (registered in reverse order — last registered runs first) ─
-    setup_cors(app)
+    # ── Middleware (registered in reverse order — last registered runs first,
+    #    i.e. becomes OUTERMOST and processes every response last on the way
+    #    out). CORS must be registered LAST so it's the outermost layer and
+    #    reaches every response, including ones a middleware short-circuits
+    #    with its own JSONResponse (e.g. RateLimitMiddleware's 429) rather
+    #    than passing through call_next(). Registered any earlier, those
+    #    short-circuited responses never reach CORSMiddleware at all, the
+    #    browser blocks them as a CORS violation, and the frontend sees a
+    #    generic network failure instead of a readable 429 — confirmed real
+    #    symptom from production testing. ─
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RateLimitMiddleware)
+    setup_cors(app)
 
     # ── Exception handlers ────────────────────────────────────────────────────
     _register_exception_handlers(app)
@@ -108,6 +117,7 @@ def _register_routers(app: FastAPI) -> None:
         export,
         health,
         icp,
+        import_csv,
         outreach,
         qualification,
         rate_limit,
@@ -124,6 +134,7 @@ def _register_routers(app: FastAPI) -> None:
     # Pipeline routes (fingerprint required — enforced per-route via Depends)
     app.include_router(icp.router, prefix=prefix)
     app.include_router(discovery.router, prefix=prefix)
+    app.include_router(import_csv.router, prefix=prefix)
     app.include_router(research.router, prefix=prefix)
     app.include_router(scoring.router, prefix=prefix)
     app.include_router(qualification.router, prefix=prefix)

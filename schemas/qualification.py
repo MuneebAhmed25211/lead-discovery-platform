@@ -16,6 +16,7 @@ Outreach (Groq call #3):
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import Field
@@ -25,15 +26,51 @@ from schemas.common import AppBaseModel, UUIDModel
 
 # ── Qualification ─────────────────────────────────────────────────────────────
 
+class QualificationStatus(StrEnum):
+    """How strongly this company matches the ICP, per Groq's evidence-grounded analysis."""
+    QUALIFIED = "qualified"
+    PARTIALLY_QUALIFIED = "partially_qualified"
+    NOT_QUALIFIED = "not_qualified"
+
+
 class Qualification(AppBaseModel):
     """
     Groq-generated qualification analysis.
 
     All fields must be grounded in P1 evidence — the prompt enforces this.
     No hallucinated claims about the company are allowed.
+
+    Field mapping to the Phase 5 spec's suggested output names (kept as
+    why_qualified/suggested_services/outreach_angle rather than renamed to
+    fit_summary/recommended_service/likely_buying_reason because these
+    field names are the existing `qualifications` table's actual columns
+    — see supabase/migrations/001_initial_schema.sql — and Phase 5 must
+    not change existing database schema):
+      qualification_status  → new field, see QualificationStatus
+      fit_summary            → why_qualified
+      primary_pain_points    → pain_points
+      recommended_service    → suggested_services
+      likely_buying_reason   → outreach_angle
+      confidence             → new field
+      reasoning               → why_qualified + evidence_summary together
     """
 
     company_id: str
+
+    # How strongly this company matches the ICP
+    qualification_status: QualificationStatus = Field(
+        ...,
+        description="Overall fit verdict: qualified, partially_qualified, or not_qualified.",
+    )
+
+    # Model's self-assessed confidence in this qualification, grounded in
+    # how much/how strong the underlying evidence is — not a vibe score.
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Groq's confidence in this qualification, 0.0–1.0.",
+    )
 
     # Why this company qualifies
     why_qualified: str = Field(
@@ -123,6 +160,8 @@ class Outreach(AppBaseModel):
 
 class QualificationRecord(UUIDModel):
     company_id: UUID
+    qualification_status: str
+    confidence: float
     why_qualified: str
     pain_points: list[str]
     suggested_services: list[str]
@@ -157,7 +196,21 @@ class QualifyBatchRequest(AppBaseModel):
     search_id: str
     icp_id: str
     min_score: int = Field(
-        default=60,
+        default=40,
+        # Lowered from 60 (frontend already overrode this to 50 in
+        # practice). Real usage data across multiple live test runs
+        # showed genuine industry+size matches — which score at least
+        # 45/100 from those two dimensions alone (25 industry + 20
+        # size) — being excluded from ever reaching the Groq
+        # qualification step by a pre-filter tuned around growth/hiring
+        # signals that plausible small businesses frequently lack on
+        # their own websites (no "we're hiring" banner, no detectable
+        # tech stack) without that being any real indicator of fit.
+        # Groq's own qualification step already has its own safety net
+        # (explicitly returns not_qualified for a clear disqualifying
+        # signal or an out-of-target industry/size) — this pre-filter's
+        # job is only to avoid wasting a Groq call on companies with no
+        # plausible fit at all, not to be the real quality gate.
         ge=0,
         le=100,
         description="Only qualify companies with total_score >= min_score.",
@@ -167,6 +220,14 @@ class QualifyBatchRequest(AppBaseModel):
 class QualifyResponse(AppBaseModel):
     qualification: Qualification
     cached: bool = False
+
+
+class QualifyBatchResponse(AppBaseModel):
+    """Response after batch qualification — mirrors ScoreBatchResponse's shape."""
+    qualified: int
+    skipped: int
+    total: int
+    qualifications: list[Qualification]
 
 
 class OutreachRequest(AppBaseModel):

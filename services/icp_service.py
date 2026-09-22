@@ -36,7 +36,7 @@ from supabase import Client
 
 from cache.supabase_cache import SupabaseCache
 from core.config import settings
-from core.errors import GroqError
+from core.errors import DatabaseError, GroqError
 from core.logging import get_logger
 from schemas.icp import ICP, ICPGenerateResponse, ICPRecord
 from utils.retry import groq_retry
@@ -90,21 +90,29 @@ Rules:
 - search_queries: EXACTLY 4–5 Google search queries designed to find REAL BUYER BUSINESS WEBSITES in the target industries — never queries that would surface companies offering the same service as the user. Each query must:
   * Target commercial businesses in a BUYER industry, not the seller's own industry
   * Use operator-style terms that surface company homepages (e.g. "careers", "contact us", "our team")
+  * Vary the buyer industry across the 4–5 queries when target_industries has multiple distinct verticals, so discovery isn't concentrated in just one industry
+  * VARY THE QUERY STRATEGY, not just the industry — do not make all 4–5 queries follow the same "[industry] hiring [role] [location]" template. Confirmed from production discovery logs: a manufacturing/warehouse/construction ICP where every query used that one template returned a 94% rejection rate (47 of 50 raw results discarded), dominated by staffing-agency and job-board domains — because that exact phrasing is what industrial/blue-collar staffing agencies themselves optimize their own pages to rank for. The same template performs far better for professional-services verticals (law, healthcare, accounting), so this matters most when target_industries includes manufacturing, warehousing, construction, food processing, logistics, or other blue-collar/industrial categories.
+    Use hiring/careers phrasing (e.g. "hiring", "careers", "join our team") in AT MOST 2 of the 4–5 queries. For the rest, use a different strategy:
+    - Facility/expansion language with NO hiring terms: "[industry] company opens new facility [location]", "[industry] company expands operations [location]"
+    - Self-descriptive industry terminology a real operating business in THIS SPECIFIC target_industries vertical uses about itself (not a staffing agency, and not a generic industrial/manufacturing phrase borrowed from a different vertical): e.g. "ISO 9001 certified manufacturer [location]" for manufacturing, "3PL provider [location]" for logistics, "USDA inspected food facility [location]" for food processing, "licensed general contractor [location]" for construction, "ASE certified auto repair shop [location]" or "family owned auto body shop [location]" for auto repair, "AAHA accredited animal hospital [location]" for veterinary, "board certified [specialty] clinic [location]" for healthcare. Confirmed failure mode: reusing a manufacturing-flavored phrase like "ISO certified ... facility" for a non-manufacturing vertical (e.g. auto repair) surfaces industrial directories and manufacturing companies instead of the actual target — the self-descriptive phrase must match how THAT vertical's real small businesses describe themselves, never a one-size-fits-all industrial template.
+    - "About us" / "our story" phrasing with no hiring language: "[industry] company [location] about us"
+    - Existing operational pain framed as a fact about the buyer, not a job posting: "[industry] group patient intake manual process" (no "hiring" needed)
   * Include industry + business-intent keywords specific to a buyer vertical (e.g. "manufacturing company hiring operations manager", "law firm multiple offices careers", "logistics company expansion new warehouse")
   * Avoid generic terms that return directories (e.g. avoid "best AI companies", "top automation agencies", "list of")
-  * Vary the buyer industry across the 4–5 queries when target_industries has multiple distinct verticals, so discovery isn't concentrated in just one industry
-  * Example good queries for "Full Stack AI Development" (capability-only description, no named buyer):
-    - manufacturing company hiring operations manager California
-    - logistics company multiple warehouses careers Texas
-    - law firm multiple offices expansion New York
-    - healthcare clinic group patient intake manual process
-    - retail chain inventory management hiring
-  * Example good queries for "AI chatbots for dental clinics" (buyer named explicitly):
-    - multi location dental group California careers
-    - orthodontic practice management software contact
-    - dental chain patient portal online booking California
-    - dental office hiring front desk staff Texas
-    - private dental group expansion new location
+  * Do NOT embed the AI/automation solution topic itself as a search keyword — e.g. avoid "computer vision quality control", "route optimization AI", "AI compliance", "AI risk management", "claims automation AI". Queries built this way reliably surface the SELLER's own competitors (vendor sites, consultancies, product pages) and SEO/marketing articles about that technology, not buyer companies — because vendors and bloggers write content targeting exactly those keywords, while real buyer companies' own websites almost never use that phrasing about themselves. Describe the buyer's business activity, hiring, expansion, or existing (non-AI) operational pain instead, exactly as in the example queries below (none of which mention the AI solution topic at all).
+  * Do NOT embed funding/investment-event language as a search keyword either — e.g. avoid "series A funding announcement", "series B funding", "raises funding", "funding round". This is the same failure mode as above with a different trigger phrase: those terms are exactly what VC/investor directories, startup-funding databases, and funding-news sites are themselves built around and rank for, so a query built this way surfaces investor lists and press-release aggregators, not the funded companies. If a buying trigger involves recent funding, phrase the query around the buyer's resulting activity instead (e.g. hiring, expansion, new office, launching a product) rather than the funding event itself.
+  * Example good queries for "Full Stack AI Development" (capability-only description, no named buyer) — note the mix of strategies below, only 2 of 5 use hiring language:
+    - manufacturing company hiring operations manager California          (hiring-based)
+    - logistics company multiple warehouses careers Texas                 (hiring-based)
+    - ISO 9001 certified manufacturer expands new facility Ohio           (self-descriptive + expansion, no hiring)
+    - law firm multiple offices about us New York                        (about-us style, no hiring)
+    - healthcare clinic group patient intake manual process              (operational pain, no hiring)
+  * Example good queries for "AI chatbots for dental clinics" (buyer named explicitly) — same mix principle:
+    - multi location dental group California careers                    (hiring-based)
+    - dental office hiring front desk staff Texas                       (hiring-based)
+    - orthodontic practice management software contact                  (contact-style, no hiring)
+    - dental chain patient portal online booking California             (operational signal, no hiring)
+    - private dental group expansion new location                       (expansion, no hiring)
   * Do NOT include quotes inside queries
 - summary: One paragraph (3–4 sentences) describing the ideal BUYER customer in plain English, explicitly noting their industry and why they would need this service rather than build it themselves.
 
@@ -137,14 +145,35 @@ class ICPService:
         # ── Cache hit ─────────────────────────────────────────────────────────
         cached = await self._cache.get(cache_key)
         if cached:
-            logger.info("icp_cache_hit", hash=description_hash[:8])
-            icp = ICP(**cached["icp"])
-            return ICPGenerateResponse(
-                icp_id=cached["icp_id"],
-                search_id=search_id,
-                icp=icp,
-                cached=True,
+            # BUG FIX: this used to trust the cached icp_id unconditionally.
+            # The cache table (24h TTL) and the icps table are independent
+            # stores — if the icps row for a cached icp_id was ever deleted,
+            # never actually inserted (see _store()'s docstring below for
+            # the exact failure mode that used to cause this silently), or
+            # the table was reset/migrated during development, the cache
+            # entry survives regardless. The frontend would then render a
+            # fully-populated ICP screen for an icp_id that returns 404 the
+            # moment the next step (discovery search) looks it up — a
+            # confirmed real case in live testing. Verifying the row still
+            # exists before trusting the cache costs one indexed lookup and
+            # makes this self-healing: a stale cache entry is treated as a
+            # miss, the stale entry is dropped, and a fresh ICP (with a
+            # fresh, verified-persisted icp_id) is generated instead.
+            if self._icp_row_exists(cached["icp_id"]):
+                logger.info("icp_cache_hit", hash=description_hash[:8])
+                icp = ICP(**cached["icp"])
+                return ICPGenerateResponse(
+                    icp_id=cached["icp_id"],
+                    search_id=search_id,
+                    icp=icp,
+                    cached=True,
+                )
+            logger.warning(
+                "icp_cache_stale",
+                hash=description_hash[:8],
+                stale_icp_id=cached["icp_id"],
             )
+            await self._cache.delete(cache_key)
 
         # ── Groq call #1 ──────────────────────────────────────────────────────
         logger.info("icp_groq_call", hash=description_hash[:8])
@@ -162,6 +191,9 @@ class ICPService:
         )
 
         # ── Cache result ──────────────────────────────────────────────────────
+        # Only reached if _store() above succeeded (it now raises on
+        # failure instead of swallowing the error), so the cache can no
+        # longer point at an icp_id that was never actually persisted.
         await self._cache.set(
             cache_key,
             {"icp_id": icp_id, "icp": icp.model_dump()},
@@ -174,6 +206,23 @@ class ICPService:
             icp=icp,
             cached=False,
         )
+
+    def _icp_row_exists(self, icp_id: str) -> bool:
+        """Check whether an icps row actually exists for this id.
+
+        Failures here are treated as "doesn't exist" (fail safe toward
+        regenerating a fresh ICP rather than risking another 404 two
+        steps later) — same reasoning as the cache-staleness fix above.
+        """
+        try:
+            result = (
+                self._db.table("icps").select("id").eq("id", icp_id).limit(1).execute()
+            )
+            return bool(result.data)
+        except Exception as exc:
+            logger.warning("icp_existence_check_failed", icp_id=icp_id, error=str(exc))
+            return False
+
 
     @groq_retry
     async def _call_groq(self, service_description: str) -> dict[str, Any]:
@@ -237,6 +286,22 @@ class ICPService:
         icp: ICP,
         raw_json: dict,
     ) -> None:
+        """
+        Persist the ICP row to Supabase.
+
+        BUG FIX: this used to catch every exception here and only log a
+        warning, letting generate() carry on to cache the result and
+        return a 200 with a fully-rendered ICP — even when the insert
+        never actually happened. The next pipeline step
+        (discovery_service._load_icp_queries) looks this icp_id up in
+        the same table and 404s ("ICP '...' not found") — by which point
+        the person has already seen a working ICP screen and has no way
+        to know why the very next click fails. Confirmed real case
+        during live testing. Raising here instead means the person gets
+        one clear, immediate error at ICP-generation time rather than a
+        confusing one two pipeline steps later, and generate() no longer
+        reaches the cache-write line at all on this path.
+        """
         try:
             self._db.table("icps").insert({
                 "id": icp_id,
@@ -255,7 +320,8 @@ class ICPService:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }).execute()
         except Exception as exc:
-            logger.warning("icp_store_failed", icp_id=icp_id, error=str(exc))
+            logger.error("icp_store_failed", icp_id=icp_id, error=str(exc))
+            raise DatabaseError(operation="insert", table="icps", cause=str(exc)) from exc
 
 
 def _hash_description(description: str) -> str:

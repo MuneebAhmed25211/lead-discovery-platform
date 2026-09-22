@@ -71,10 +71,14 @@ class Settings(BaseSettings):
 
     # ── Groq ─────────────────────────────────────────────────────────────────
     GROQ_API_KEY: str = Field(..., min_length=10)
-    # llama-3.1-70b-versatile was deprecated by Groq in early 2025.
-    # Current default is llama-3.3-70b-versatile (same capability, active model).
+    # llama-3.1-70b-versatile was deprecated by Groq in early 2025 in favor
+    # of llama-3.3-70b-versatile. On June 17, 2026, Groq announced the
+    # deprecation of llama-3.3-70b-versatile itself, recommending migration
+    # to openai/gpt-oss-120b (or qwen/qwen3.6-27b as a lighter alternative)
+    # for equivalent general-purpose reasoning/tool-use workloads.
+    # See: https://console.groq.com/docs/deprecations
     # Override via GROQ_MODEL env var if Groq releases a newer model.
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_MAX_TOKENS: int = Field(default=2048, ge=256, le=8192)
     GROQ_TEMPERATURE: float = Field(default=0.3, ge=0.0, le=1.0)
 
@@ -101,7 +105,11 @@ class Settings(BaseSettings):
     # ── Rate Limiting ─────────────────────────────────────────────────────────
     RATE_LIMIT_MAX_SEARCHES: int = Field(default=3, ge=1, le=100)
     RATE_LIMIT_WINDOW_DAYS: int = Field(default=30, ge=1, le=365)
-    RATE_LIMIT_CONTACT_URL: str = "https://www.linkedin.com/in/muneebahmedai"
+    RATE_LIMIT_CONTACT_URL: str = (
+        "mailto:muneebahmad25211@gmail.com"
+        "?subject=Custom%20Lead%20Generation%20System"
+        "&body=Hi%20Muneeb%2C%20I%20tried%20your%20lead%20discovery%20demo%20and%20I%27d%20like%20to%20talk%20about%20a%20custom%20system%20for%20my%20business."
+    )
 
     # ── Cache TTLs (in hours) ─────────────────────────────────────────────────
     CACHE_ICP_TTL_HOURS: int = Field(default=24, ge=1)

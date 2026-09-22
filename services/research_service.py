@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from bs4 import BeautifulSoup
 from supabase import Client
 
 from core.errors import NotFoundError
@@ -58,6 +59,8 @@ from crawlers.extractors.social import extract_social
 from crawlers.extractors.technologies import extract_technologies
 from crawlers.p1_crawler import CrawlResult, PageResult, crawl_client, crawl_company
 from schemas.company import Company, ResearchResponse, ResearchStatus
+from utils.validator import validate_candidate
+from utils.wikidata_check import check_wikidata_entity_type
 
 logger = get_logger(__name__)
 
@@ -142,6 +145,87 @@ class ResearchService:
                     discovered_company_id, search_id, domain, website,
                     discovery_source_url, discovery_snippet, crawl_result,
                 )
+
+            # Post-crawl re-validation. Discovery-time validation
+            # (utils/validator.validate_candidate, called from
+            # discovery_service.py) only ever sees the search provider's
+            # indexed title/snippet for a result — not the live page. When
+            # a search engine's cached title differs from the site's real
+            # <title>/og:site_name (common for content sites that get
+            # re-titled per-article, or whose homepage title is shorter
+            # than their real masthead), a noise candidate that should
+            # have been rejected (a magazine, directory, association,
+            # etc.) can slip past discovery validation and only reveal
+            # itself once we've crawled the actual page. Confirmed real
+            # case: foodandbeverage.business's crawled name is "Food and
+            # Beverage Business Magazine" (extract_name.py catches this
+            # via og:site_name/<title>, both of which literally contain
+            # "Magazine"), but discovery-time validation passed it —
+            # meaning the search provider's title for that result didn't
+            # contain the word. Re-running the same title/content checks
+            # here, against ground-truth crawled data instead of
+            # discovery-time metadata, closes that gap. Pass 1-3
+            # (URL/domain-based) already ran at discovery time and can't
+            # change, but the content-based checks (media publication,
+            # directory, association, event, Built In network, etc.) now
+            # get a real snippet built from the crawled pages themselves
+            # — see _crawled_content_snippet's docstring for why title
+            # alone wasn't enough (confirmed real case: Startup Savant's
+            # "editorial team" / "Media Kit" self-description lives on
+            # its /about-us page, not in its <title>).
+            canonical_name = self._best_field(facts, F_NAME)
+            crawled_snippet = self._crawled_content_snippet(crawl_result)
+            if canonical_name or crawled_snippet:
+                post_crawl_check = validate_candidate(
+                    url=discovery_source_url or website,
+                    title=canonical_name,
+                    domain=domain,
+                    snippet=crawled_snippet,
+                )
+                if not post_crawl_check.passed:
+                    logger.info(
+                        "post_crawl_validation_rejected",
+                        domain=domain,
+                        canonical_name=canonical_name,
+                        reason=post_crawl_check.rejection_reason,
+                    )
+                    return self._handle_skipped(
+                        discovered_company_id, search_id, domain, website,
+                        discovery_source_url, discovery_snippet,
+                        reason=f"post_crawl_noise:{post_crawl_check.rejection_reason}",
+                    )
+
+            # Wikidata entity-type check — a structural upgrade discussed
+            # with the user rather than another hand-written regex.
+            # utils/validator.py's checks above (and everywhere else in
+            # this file) all work the same reactive way: a real case
+            # leaks, its own self-description gets read, a regex gets
+            # written to catch that exact phrasing. This check instead
+            # asks a pre-vetted structured database (Wikidata's community-
+            # maintained "instance of" property) whether the candidate is
+            # a government body, news outlet, or nonprofit — for any
+            # candidate notable enough to have a Wikidata page. Most
+            # small private companies (the bulk of any real ICP) won't
+            # have one, and that's fine: WikidataCheckResult.checked=False
+            # is treated identically to "passed," never as a rejection.
+            # Only an explicit, confident, exact-name match against a
+            # known disqualifying type ever rejects a candidate here — see
+            # utils/wikidata_check.py's module docstring for the full
+            # rationale and stated limits.
+            if canonical_name:
+                wikidata_result = await check_wikidata_entity_type(client, canonical_name)
+                if wikidata_result.flagged:
+                    logger.info(
+                        "wikidata_entity_type_rejected",
+                        domain=domain,
+                        canonical_name=canonical_name,
+                        matched_type=wikidata_result.matched_type_label,
+                    )
+                    return self._handle_skipped(
+                        discovered_company_id, search_id, domain, website,
+                        discovery_source_url, discovery_snippet,
+                        reason=f"wikidata_entity_type:{wikidata_result.matched_type_label}",
+                    )
 
             company_id = str(uuid.uuid4())
             company = self._build_company(
@@ -268,6 +352,50 @@ class ResearchService:
             total_weight += weight
         return round(weighted_sum / total_weight, 3) if total_weight > 0 else 0.0
 
+    @staticmethod
+    def _crawled_content_snippet(crawl_result: CrawlResult, max_chars: int = 3000) -> str:
+        """
+        Plain text pulled from the actually-crawled pages, for the
+        post-crawl re-validation "snippet" parameter below.
+
+        Passing "" here (as the original post-crawl re-validation did)
+        meant that check could only ever catch noise visible in a
+        company's NAME. That misses self-descriptions that live in body
+        copy instead of the title — confirmed real case: Startup Savant's
+        own /about-us page states "Media Kit and Advertise page" and
+        describes itself as a "resource guide" with an editorial team,
+        exactly the kind of phrase utils/validator.py's media-publication
+        and directory checks already look for — but none of that appears
+        in its <title>, so title-only re-validation missed it. Reusing
+        the same BeautifulSoup get_text() approach already used by
+        crawlers/extractors/industry.py's _text_from_page, rather than
+        introducing a second way to turn HTML into text.
+
+        Deliberately concatenates ALL successfully crawled pages (not
+        just the homepage) — the confirmed leak was specifically on
+        /about-us, not the homepage, so limiting this to one page would
+        have missed the exact case it exists to catch.
+        """
+        chunks: list[str] = []
+        for page in crawl_result.successful_pages:
+            try:
+                soup = BeautifulSoup(page.html, "lxml")
+                chunks.append(soup.get_text(" ", strip=True))
+            except Exception:
+                continue
+        return " ".join(chunks)[:max_chars]
+
+    @staticmethod
+    def _best_field(facts: list[ExtractedFact], field: str) -> str:
+        """
+        Highest-confidence value for a field, or "" if none extracted.
+        Shared by the post-crawl validation check (research_company) and
+        _build_company's own `best()` closure — same selection rule,
+        used in two places, so it lives once here instead of twice.
+        """
+        candidates = [f for f in facts if f.field_name == field]
+        return max(candidates, key=lambda f: f.confidence).value if candidates else ""
+
     def _build_company(
         self,
         company_id: str, search_id: str, domain: str, website: str,
@@ -276,8 +404,7 @@ class ResearchService:
     ) -> Company:
 
         def best(field: str) -> str:
-            candidates = [f for f in facts if f.field_name == field]
-            return max(candidates, key=lambda f: f.confidence).value if candidates else ""
+            return self._best_field(facts, field)
 
         def all_values(field: str) -> list[str]:
             seen: set[str] = set()

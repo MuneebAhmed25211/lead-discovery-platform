@@ -27,17 +27,32 @@ from crawlers.extractors.base import (
 )
 from crawlers.p1_crawler import PageResult
 
-# US state abbreviations for pattern matching
-_US_STATES = re.compile(
-    r"\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|"
-    r"MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|"
-    r"UT|VT|VA|WA|WV|WI|WY|DC)\b"
-)
+# US state abbreviations for pattern validation
+_US_STATE_CODES = frozenset({
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC",
+})
 
-# Patterns that look like "City, ST" or "City, State" or "City, Country"
-_CITY_STATE_PATTERN = re.compile(
-    r"\b([A-Z][a-zA-Z\s]{2,25}),\s*([A-Z]{2}|[A-Z][a-z]{3,20})\b"
-)
+# Full country/region names that legitimately follow "City, X" in an
+# address (as opposed to a US state code). Deliberately not exhaustive —
+# scoped to countries this platform's ICPs actually target (see
+# core/config.py rate limiting / discovery target countries), extended
+# only as real addresses surface a country not yet in this list.
+_COUNTRY_OR_REGION_NAMES = frozenset({
+    "usa", "united states", "us", "uk", "united kingdom", "england",
+    "scotland", "wales", "canada", "australia", "ireland", "new zealand",
+})
+
+# A state/country token: either a 2-letter US state code, or a single
+# capitalized word up to 20 letters (covers "Australia", "Canada", etc.
+# from _COUNTRY_OR_REGION_NAMES — validated, not just pattern-matched).
+_STATE_TOKEN_PATTERN = re.compile(r"^([A-Za-z]{2,20})\b")
+
+# A city-like trailing word/phrase at the end of a text segment.
+_CITY_TOKEN_PATTERN = re.compile(r"([A-Z][a-zA-Z]{2,25})$")
 
 # Zip code adjacent to city/state — helps confirm it's a real address
 _ZIP_PATTERN = re.compile(r"\b\d{5}(?:-\d{4})?\b")
@@ -106,6 +121,19 @@ def _from_schema_org(soup: BeautifulSoup, source_url: str) -> list[ExtractedFact
 def _from_footer_text(soup: BeautifulSoup, source_url: str) -> list[ExtractedFact]:
     """
     Look for address patterns in footer, contact sections, and address tags.
+
+    Scans every adjacent pair of comma-separated segments in the element's
+    text (rather than one regex spanning the whole string) because most
+    real addresses have a street segment before the city — e.g.
+    "123 Main St, Austin, TX 78701" — and a single greedy capture group
+    mismatches on exactly that shape, swallowing "Main St, Austin" as one
+    segment and never finding "Austin, TX" at all. Checking each pair lets
+    the correct (city, state) segment win regardless of how many commas
+    precede it, while still requiring the second segment of the pair to
+    validate as a real state code or country name (rejecting shapes like
+    a byline — "Lee Ying Shan, Sarah" — or a name/department pair —
+    "Ehsan, Engineering" — both confirmed false positives from real
+    crawls of CNBC and Apple).
     """
     facts: list[ExtractedFact] = []
     source_type = source_type_for_url(source_url)
@@ -119,13 +147,47 @@ def _from_footer_text(soup: BeautifulSoup, source_url: str) -> list[ExtractedFac
     seen: set[str] = set()
     for el in address_elements[:5]:  # cap to avoid huge DOMs
         text = el.get_text(" ", strip=True)
-        # Look for city/state patterns
-        for match in _CITY_STATE_PATTERN.finditer(text):
-            city = match.group(1).strip()
-            state = match.group(2).strip()
-            # Filter out false positives (very generic words)
-            if city.lower() in {"we", "our", "the", "and", "for", "with"}:
+        segments = [s.strip() for s in text.split(",") if s.strip()]
+
+        for i in range(len(segments) - 1):
+            state_match = _STATE_TOKEN_PATTERN.match(segments[i + 1])
+            if not state_match:
                 continue
+            state = state_match.group(1)
+            # Exact-case match for 2-letter codes, not case-insensitive:
+            # several state abbreviations (IN, OR, ME, HI, OK, CO, PA...)
+            # double as common English words/abbreviations that appear
+            # lowercase in ordinary prose ("...Solutions, in the
+            # industry..."), while real addresses are virtually always
+            # written in full caps ("Austin, TX"). Country names stay
+            # case-insensitive since they appear in prose in any casing.
+            # Confirmed real cases this fixes: "CVS, in" and "Solutions,
+            # in" both matched Indiana via case-insensitive "in" == "IN".
+            is_state_code = len(state) == 2 and state in _US_STATE_CODES
+            if not is_state_code and state.lower() not in _COUNTRY_OR_REGION_NAMES:
+                continue
+
+            city_match = _CITY_TOKEN_PATTERN.search(segments[i])
+            if not city_match:
+                continue
+            city = city_match.group(1)
+            # Filter out false positives (very generic words, street
+            # suffixes, and job titles). Job titles are the confirmed
+            # real case: EduGrowth's crawled page produced "CEO,
+            # Australia" as a location — a leadership-bio byline (e.g.
+            # "Jane Smith, CEO, Australia") where "CEO" happened to sit
+            # immediately before a real country name, the exact same
+            # byline/title-adjacent-to-real-location shape already
+            # documented above for "Lee Ying Shan, Sarah" and "Ehsan,
+            # Engineering" — just a job title this set didn't cover yet.
+            if city.lower() in {
+                "we", "our", "the", "and", "for", "with", "st", "ave",
+                "rd", "dr", "blvd", "ceo", "cto", "cfo", "coo", "cmo",
+                "cio", "founder", "cofounder", "president", "chairman",
+                "chairwoman", "chair", "director", "manager", "vp",
+            }:
+                continue
+
             location = f"{city}, {state}"
             if location not in seen:
                 seen.add(location)

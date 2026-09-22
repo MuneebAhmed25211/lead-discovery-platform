@@ -32,6 +32,7 @@ from supabase import Client
 from cache.supabase_cache import SupabaseCache, get_cache
 from core.config import settings
 from core.dependencies import get_client_ip, get_db, require_fingerprint
+from core.errors import DatabaseError
 from core.logging import get_logger
 from middleware.rate_limit import RateLimitService
 from schemas.common import SuccessResponse
@@ -97,6 +98,23 @@ async def generate_icp(
 
 
 def _store_search_record(db: Client, search_id: str, fingerprint: str, description: str) -> None:
+    """
+    Persist the searches row that icps.search_id has a foreign-key
+    dependency on.
+
+    BUG FIX: this used to catch every exception and only log a warning,
+    letting generate_icp() carry on to the Groq call and the ICP insert
+    even when this row was never created. Confirmed real case: a
+    transient network failure reaching Supabase here (getaddrinfo
+    failed — a DNS blip) was silently swallowed; generate_icp() then
+    spent 10-20+ seconds on a real Groq call, and only THEN failed with
+    a foreign-key violation on the icps insert ("Key (search_id)=(...)
+    is not present in table searches") — which looks like an ICP-storage
+    bug but is actually caused entirely by this earlier silent failure.
+    Raising here means a transient DB/network issue fails fast and
+    cheaply, before wasting a Groq call, with the error pointing at its
+    actual source.
+    """
     try:
         db.table("searches").upsert({
             "id": search_id,
@@ -105,7 +123,8 @@ def _store_search_record(db: Client, search_id: str, fingerprint: str, descripti
             "created_at": datetime.now(timezone.utc).isoformat(),
         }, on_conflict="id").execute()
     except Exception as exc:
-        logger.warning("search_record_store_failed", error=str(exc))
+        logger.error("search_record_store_failed", error=str(exc))
+        raise DatabaseError(operation="upsert", table="searches", cause=str(exc)) from exc
 
 
 def _log_analytics(db: Client, event_type: str, fingerprint: str, metadata: dict) -> None:

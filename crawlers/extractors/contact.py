@@ -31,6 +31,7 @@ Phone filtering:
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
 
@@ -151,7 +152,17 @@ def extract_contact(pages: list[PageResult]) -> list[ExtractedFact]:
 
             # ── Emails: mailto: links first (highest confidence) ──────────
             for a_tag in soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
-                href = a_tag["href"].replace("mailto:", "").split("?")[0].strip().lower()
+                # unquote() BEFORE stripping: some sites bake a literal
+                # URL-encoded space into their mailto: href (a stray space
+                # in the source HTML that got percent-encoded on render).
+                # Confirmed real cases: "mailto:%20info@lcxfresh.com" and
+                # "mailto:mike@ruscologistics.com%20" both produced emails
+                # with a literal "%20" left in them, because "%20" is text
+                # to str.strip() — it's not whitespace until decoded, so
+                # stripping first (the original order here) never touches
+                # it. Decoding first turns %20 into a real space, which
+                # strip() then correctly removes.
+                href = unquote(a_tag["href"]).replace("mailto:", "").split("?")[0].strip().lower()
                 if href and href not in seen_emails and _is_useful_email(href):
                     seen_emails.add(href)
                     facts.append(ExtractedFact(

@@ -65,7 +65,17 @@ _POOL_LIMITS = httpx.Limits(
 # Page slug candidates in priority order: (primary_slug, *alternates)
 _PAGE_CANDIDATES: list[tuple[str, ...]] = [
     ("/",),
-    ("/about", "/about-us", "/about-us/", "/who-we-are", "/our-story"),
+    # "/aboutus" (one word, no hyphen) added after a confirmed real gap:
+    # Statista surfaced as a "MODERATE FIT" lead under a backend-
+    # infrastructure ICP with company size stuck at "unknown", even
+    # though Statista's own site states its headcount in the kind of
+    # phrasing the existing employee-count regex already handles ("over
+    # 1,100 employees", confirmed via its LinkedIn/About copy) — the
+    # actual gap wasn't the regex, it was that Statista's real About URL
+    # is statista.com/aboutus/..., a one-word slug none of the other
+    # variants below match, so the page was never fetched in the first
+    # place.
+    ("/about", "/about-us", "/about-us/", "/aboutus", "/who-we-are", "/our-story"),
     ("/services", "/our-services", "/what-we-do", "/solutions", "/offerings"),
     ("/team", "/our-team", "/leadership", "/about/team", "/about/leadership"),
     ("/careers", "/jobs", "/join-us", "/work-with-us", "/join-our-team"),
@@ -368,8 +378,10 @@ async def _crawl_with_client(
     ]
     page_results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    failure_reasons: list[str] = []
     for page in page_results:
         if isinstance(page, Exception):
+            failure_reasons.append(f"unexpected:{str(page)[:60]}")
             continue
         if page.ok:
             result.pages.append(page)
@@ -380,3 +392,36 @@ async def _crawl_with_client(
             # variant failed — so this list accurately reflects
             # which page-types could not be retrieved.
             result.pages_failed.append(page.url)
+            # Keep pages_failed itself as list[str] of URLs — it's a typed
+            # field read by schemas/company.py and the frontend
+            # (Company.p1_pages_failed: string[]), so its shape can't
+            # change here. But the *reason* each page failed (timeout vs
+            # http 403 vs connection error) was previously computed by
+            # _resolve_page and then silently discarded — meaning
+            # CrawlResult.error stayed "" for every crawl that failed
+            # without an outer exception (i.e. almost all real-world
+            # failures: a domain returning 403 to every path, or timing
+            # out on every path, never raises — _fetch_page catches all
+            # of that and returns a normal PageResult). That left the
+            # research_failed log line in research_service.py always
+            # printing error="", making it impossible to tell a genuine
+            # anti-bot block apart from a fixable timeout setting.
+            # Confirmed real case: tonysbodyshop.com, eagleautorepairny.com,
+            # and bodyshopbusiness.com all logged research_failed with a
+            # blank error during live testing.
+            failure_reasons.append(page.error or (f"http_{page.status_code}" if page.status_code else "no_response"))
+
+    # Only worth summarizing when the crawl as a whole failed (no page
+    # succeeded) — a partial failure (e.g. /careers missing) is normal and
+    # already fully captured by pages_crawled vs pages_failed.
+    if not result.pages_crawled and failure_reasons and not result.error:
+        # Compact frequency summary rather than one entry per page-type,
+        # e.g. "6 pages failed: http_403 x4, timeout after 10s x2" — enough
+        # to distinguish "this site blocks bots" (repeated 403/406) from
+        # "our timeout is too short" (repeated timeout) from "domain is
+        # dead" (connection errors) at a glance in the logs.
+        counts: dict[str, int] = {}
+        for reason in failure_reasons:
+            counts[reason] = counts.get(reason, 0) + 1
+        summary = ", ".join(f"{reason} x{n}" for reason, n in counts.items())
+        result.error = f"{len(failure_reasons)} pages failed: {summary}"

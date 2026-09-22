@@ -62,30 +62,53 @@ def groq_retry(func: F) -> F:
         attempt = 0
         last_exc: Exception | None = None
 
-        async for attempt_ctx in AsyncRetrying(
-            stop=stop_after_attempt(3),
-            wait=wait_exponential(multiplier=1, min=2, max=8),
-            reraise=False,
-        ):
-            with attempt_ctx:
-                attempt += 1
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as exc:
-                    error_msg = str(exc).lower()
-                    if "rate_limit" in error_msg or "429" in error_msg:
-                        operation = func.__name__
-                        logger.warning("groq_rate_limit", operation=operation, attempt=attempt)
-                        raise GroqRateLimitError(operation=operation) from exc
-                    last_exc = exc
-                    logger.warning("groq_retry", operation=func.__name__, attempt=attempt, error=str(exc))
-                    raise
+        # BUG FIX: this used to have the GroqError/GroqRateLimitError
+        # fallback logic written as plain code AFTER this async-for loop,
+        # on the assumption that once stop_after_attempt(3) is reached the
+        # loop simply ends and falls through. It doesn't: with
+        # reraise=False, tenacity's AttemptManager.__exit__ raises its own
+        # tenacity.RetryError the moment the stop condition is hit — that
+        # exception escapes the "async for" statement itself, so the code
+        # written after the loop was unreachable dead code. Confirmed by
+        # reproducing this exact pattern standalone: the intended fallback
+        # line never executes, and a raw, un-typed tenacity.RetryError
+        # propagates instead. Since RetryError isn't a LeadDiscoveryError
+        # subclass, main.py's global handler doesn't recognize it either,
+        # so it surfaced as an unhandled exception / raw 500 with a full
+        # Python traceback dumped to the console — confirmed in live
+        # testing (ICP generation crashed exactly this way under a
+        # transient network blip). Wrapping the loop in try/except and
+        # doing the classification in the except block (which DOES run,
+        # since the escaping RetryError is catchable from outside the
+        # loop) fixes this while keeping the retry behavior identical.
+        try:
+            async for attempt_ctx in AsyncRetrying(
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(multiplier=1, min=2, max=8),
+                reraise=False,
+            ):
+                with attempt_ctx:
+                    attempt += 1
+                    try:
+                        return await func(*args, **kwargs)
+                    except Exception as exc:
+                        last_exc = exc
+                        logger.warning("groq_retry", operation=func.__name__, attempt=attempt, error=str(exc))
+                        raise
+        except Exception as exc:
+            operation = func.__name__
+            cause = str(last_exc) if last_exc is not None else str(exc)
+            error_msg = cause.lower()
+            if "rate_limit" in error_msg or "429" in error_msg:
+                logger.warning("groq_rate_limit", operation=operation, attempt=attempt)
+                raise GroqRateLimitError(operation=operation) from exc
+            logger.error("groq_failed", operation=operation, attempts=attempt, cause=cause)
+            raise GroqError(operation=operation, cause=cause) from exc
 
-        operation = func.__name__
-        cause = str(last_exc) if last_exc else "unknown"
-        logger.error("groq_failed", operation=operation, attempts=attempt, cause=cause)
-        from core.errors import GroqError
-        raise GroqError(operation=operation, cause=cause)
+        # Unreachable in practice (the try/except above always raises or
+        # returns first) but kept as a defensive fallback in case tenacity's
+        # exhaustion behavior ever changes.
+        raise GroqError(operation=func.__name__, cause=str(last_exc) if last_exc else "unknown")
 
     return wrapper  # type: ignore[return-value]
 
@@ -106,23 +129,33 @@ def http_retry(func: F) -> F:
         attempt = 0
         last_exc: Exception | None = None
 
-        async for attempt_ctx in AsyncRetrying(
-            stop=stop_after_attempt(2),
-            wait=wait_exponential(multiplier=1, min=1, max=2),
-            reraise=False,
-        ):
-            with attempt_ctx:
-                attempt += 1
-                try:
-                    return await func(*args, **kwargs)
-                except CrawlTimeoutError:
-                    raise
-                except Exception as exc:
-                    last_exc = exc
-                    logger.debug("http_retry", fn=func.__name__, attempt=attempt, error=str(exc))
-                    raise
+        # Same reraise=False escaping-RetryError issue as groq_retry above —
+        # see that function's comment for the full explanation. This
+        # decorator has no current callers (grep confirms nothing in the
+        # codebase uses @http_retry today), so it had no live impact, but
+        # fixed for consistency and so it's safe to reach for later.
+        try:
+            async for attempt_ctx in AsyncRetrying(
+                stop=stop_after_attempt(2),
+                wait=wait_exponential(multiplier=1, min=1, max=2),
+                reraise=False,
+            ):
+                with attempt_ctx:
+                    attempt += 1
+                    try:
+                        return await func(*args, **kwargs)
+                    except CrawlTimeoutError:
+                        raise
+                    except Exception as exc:
+                        last_exc = exc
+                        logger.debug("http_retry", fn=func.__name__, attempt=attempt, error=str(exc))
+                        raise
+        except CrawlTimeoutError:
+            raise
+        except Exception:
+            logger.warning("http_failed", fn=func.__name__, attempts=attempt, cause=str(last_exc))
+            return None
 
-        logger.warning("http_failed", fn=func.__name__, attempts=attempt, cause=str(last_exc))
-        return None
+        return None  # defensive fallback, same reasoning as groq_retry
 
     return wrapper  # type: ignore[return-value]

@@ -49,7 +49,10 @@ from utils.validator import negative_site_filters, validate_candidate
 logger = get_logger(__name__)
 
 _MAX_QUERIES_PER_DISCOVERY = 5
-_RESULTS_PER_QUERY = 10
+_RESULTS_PER_QUERY = 20  # raised from 10 — both providers already support up to 20/call
+                         # (see providers/serper.py, providers/tavily.py num_results caps);
+                         # this simply widens the funnel input per query, the existing
+                         # validator/scoring/qualify pipeline still does all the filtering
 
 
 class DiscoveryService:
@@ -224,6 +227,7 @@ class DiscoveryService:
             url=result.url,
             title=result.title,
             domain=domain,
+            snippet=result.snippet,
         )
 
         if not validation.passed:
@@ -252,6 +256,15 @@ class DiscoveryService:
         )
 
     # ── Persistence ──────────────────────────────────────────────────────────
+
+    def persist_companies(self, candidates: list[DiscoveredCompany]) -> list[DiscoveredCompany]:
+        """
+        Public entry point for _persist(), so other services (e.g.
+        ImportService for CSV import) can reuse the exact same upsert
+        logic instead of duplicating it — one persistence code path for
+        every source a DiscoveredCompany can come from.
+        """
+        return self._persist(candidates)
 
     def _persist(self, candidates: list[DiscoveredCompany]) -> list[DiscoveredCompany]:
         """
@@ -320,8 +333,15 @@ def _derive_name(title: str) -> str:
     Search result titles commonly have suffixes like " | Home", " - Official
     Site", " :: Services". Strip at common separators and take the first
     segment, which is usually the brand name.
+
+    Separator list includes both em dash (—, U+2014) and en dash (–,
+    U+2013) — confirmed real case: foodandbeverage.business's title uses
+    an en dash ("Food and Beverage Business Magazine – Food and beverage
+    business directory"), which the em-dash-only version of this list
+    silently failed to split on, leaving the full unsplit title as the
+    displayed name instead of just the brand segment.
     """
-    for separator in (" | ", " - ", " — ", " :: ", " · ", " > "):
+    for separator in (" | ", " - ", " — ", " – ", " :: ", " · ", " > "):
         if separator in title:
             return title.split(separator)[0].strip()
     return title.strip()
