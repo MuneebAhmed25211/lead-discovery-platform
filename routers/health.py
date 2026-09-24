@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-@router.get("/health", response_model=HealthResponse, tags=["System"])
+@router.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse, tags=["System"])
 async def health_check() -> HealthResponse:
     services: dict[str, ServiceHealth] = {}
 
