@@ -27,7 +27,9 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -43,6 +45,57 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+# ── Global Groq call pacing ───────────────────────────────────────────────────
+#
+# Added after confirming in production logs that a single CSV-import batch of
+# ~15 companies firing qualify calls back-to-back hit Groq's free-tier
+# token-per-minute ceiling directly: "Limit 8000, Used 7536, Requested 3956" —
+# a single qualify call runs ~3,400-4,000 tokens, so the free tier only has
+# genuine headroom for roughly 2 such calls per rolling minute. No amount of
+# client-side pacing can stretch a fixed per-minute token budget further than
+# that; what pacing CAN do is stop this app from being the one bursting past
+# it, whether that burst comes from one batch or from several different
+# visitors' requests landing close together (this app runs as a single Render
+# process — `--workers 1` — so a process-wide gate here genuinely covers every
+# concurrent request, not just calls within one batch).
+#
+# _MIN_GROQ_CALL_INTERVAL_SECONDS is deliberately a single named constant to
+# make the tradeoff explicit and easy to tune later: lower it for faster
+# batches with a higher chance of hitting a 429 (which @groq_retry above still
+# absorbs via backoff — this isn't the only safety net, just the first one);
+# raise it for a stronger guarantee at the cost of slower processing. 20s
+# keeps a 15-company batch to ~5 minutes rather than firing all 15 in a few
+# seconds, while meaningfully — not perfectly — reducing collisions, since
+# true zero-collision safety would require ~30s (8000 TPM / ~4000 tokens per
+# call ≈ 2 calls/minute) and that felt too slow for a live demo to accept by
+# default without seeing real traffic patterns first.
+_MIN_GROQ_CALL_INTERVAL_SECONDS = 20.0
+
+_groq_pacing_lock = asyncio.Lock()
+_last_groq_call_at: float = 0.0
+
+
+async def _wait_for_groq_pacing_slot() -> None:
+    """
+    Block the caller until at least _MIN_GROQ_CALL_INTERVAL_SECONDS have
+    elapsed since the last Groq call *started*, across the whole process —
+    not just within one request or one batch. The lock makes the
+    read-compute-update sequence atomic, so two concurrent calls can't both
+    read the same "last call" timestamp and both proceed as if they were
+    first; only one waiter can be inside the critical section at a time,
+    and each one updates the shared timestamp before releasing it for the
+    next.
+    """
+    global _last_groq_call_at
+    async with _groq_pacing_lock:
+        now = time.monotonic()
+        elapsed = now - _last_groq_call_at
+        remaining = _MIN_GROQ_CALL_INTERVAL_SECONDS - elapsed
+        if remaining > 0:
+            logger.info("groq_pacing_wait", seconds=round(remaining, 1))
+            await asyncio.sleep(remaining)
+        _last_groq_call_at = time.monotonic()
 
 
 def groq_retry(func: F) -> F:
@@ -90,6 +143,7 @@ def groq_retry(func: F) -> F:
                 with attempt_ctx:
                     attempt += 1
                     try:
+                        await _wait_for_groq_pacing_slot()
                         return await func(*args, **kwargs)
                     except Exception as exc:
                         last_exc = exc
