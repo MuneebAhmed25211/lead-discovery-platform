@@ -15,6 +15,7 @@ session are free — rate limiting at ICP is sufficient.
 
 from __future__ import annotations
 
+import hmac
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Request
@@ -33,6 +34,30 @@ logger = get_logger(__name__)
 _RATE_LIMITED_PATHS = {"/api/v1/icp/generate"}
 
 
+def resolve_quota(access_token: str | None, fingerprint: str) -> tuple[str, int]:
+    """Return (quota_key, max_searches) for this request.
+
+    A valid invite token moves the request onto its own quota bucket
+    ("invite:<label>") with its own limit, shared across every browser/device
+    the invitee uses. An invalid or missing token silently falls back to the
+    normal per-fingerprint free quota (fail closed, never fail open).
+    The fingerprint itself is untouched: search ownership still uses it.
+    """
+    token = (access_token or "").strip()
+    if token:
+        for entry in settings.RATE_LIMIT_INVITES.split(","):
+            parts = entry.strip().split(":")
+            if len(parts) != 3:
+                continue
+            label, secret, limit = parts
+            if secret and hmac.compare_digest(token, secret):
+                try:
+                    return f"invite:{label}", int(limit)
+                except ValueError:
+                    break
+    return fingerprint, settings.RATE_LIMIT_MAX_SEARCHES
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path not in _RATE_LIMITED_PATHS:
@@ -47,7 +72,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         try:
             db = get_service_client()
             service = RateLimitService(db)
-            state = await service.check(fingerprint=fingerprint, ip=client_ip)
+            token = request.headers.get("X-Access-Token")
+            state = await service.check(fingerprint=fingerprint, ip=client_ip, access_token=token)
 
             if state.is_blocked:
                 logger.info("rate_limit_blocked", fp=fingerprint[:8], count=state.search_count)
@@ -80,8 +106,8 @@ class RateLimitService:
     def __init__(self, db: Client) -> None:
         self._db = db
 
-    async def check(self, fingerprint: str, ip: str) -> RateLimitState:
-        max_searches = settings.RATE_LIMIT_MAX_SEARCHES
+    async def check(self, fingerprint: str, ip: str, access_token: str | None = None) -> RateLimitState:
+        fingerprint, max_searches = resolve_quota(access_token, fingerprint)
         window_days = settings.RATE_LIMIT_WINDOW_DAYS
 
         try:
@@ -125,9 +151,9 @@ class RateLimitService:
             blocked_until=blocked_until,
         )
 
-    async def increment(self, fingerprint: str, ip: str) -> RateLimitState:
+    async def increment(self, fingerprint: str, ip: str, access_token: str | None = None) -> RateLimitState:
         """Increment search count. Call AFTER successful ICP generation."""
-        max_searches = settings.RATE_LIMIT_MAX_SEARCHES
+        fingerprint, max_searches = resolve_quota(access_token, fingerprint)
         window_days = settings.RATE_LIMIT_WINDOW_DAYS
         now = datetime.now(timezone.utc)
 
@@ -181,10 +207,10 @@ class RateLimitService:
         except Exception as exc:
             logger.error("rate_limit_increment_failed", error=str(exc))
 
-        return await self.check(fingerprint=fingerprint, ip=ip)
+        return await self.check(fingerprint=fingerprint, ip=ip, access_token=access_token)
 
-    async def get_status(self, fingerprint: str, ip: str) -> RateLimitStatusResponse:
-        state = await self.check(fingerprint=fingerprint, ip=ip)
+    async def get_status(self, fingerprint: str, ip: str, access_token: str | None = None) -> RateLimitStatusResponse:
+        state = await self.check(fingerprint=fingerprint, ip=ip, access_token=access_token)
         window_resets_at = None
         if state.first_search_at:
             window_resets_at = state.first_search_at + timedelta(days=settings.RATE_LIMIT_WINDOW_DAYS)

@@ -84,7 +84,10 @@ async def generate_icp(
     if not result.cached:
         ip = get_client_ip(request)
         rl_service = RateLimitService(db)
-        await rl_service.increment(fingerprint=fingerprint, ip=ip)
+        await rl_service.increment(
+            fingerprint=fingerprint, ip=ip,
+            access_token=request.headers.get("X-Access-Token"),
+        )
 
     # Log analytics event
     _log_analytics(db, event_type="icp_generated", fingerprint=fingerprint, metadata={

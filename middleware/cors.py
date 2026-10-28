@@ -30,7 +30,7 @@ def setup_cors(app: FastAPI) -> None:
         allow_origins=origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Fingerprint", "Authorization"],
+        allow_headers=["Content-Type", "X-Fingerprint", "X-Access-Token", "Authorization"],
         expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining"],
         max_age=86400,  # Cache preflight for 24 hours
     )

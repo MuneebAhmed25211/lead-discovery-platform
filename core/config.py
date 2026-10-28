@@ -105,6 +105,9 @@ class Settings(BaseSettings):
     # ── Rate Limiting ─────────────────────────────────────────────────────────
     RATE_LIMIT_MAX_SEARCHES: int = Field(default=3, ge=1, le=100)
     RATE_LIMIT_WINDOW_DAYS: int = Field(default=30, ge=1, le=365)
+    # Invite grants: "label:token:max_searches" entries, comma-separated.
+    # e.g. "naeem:Zx9...longrandom...:50". Empty = no grants.
+    RATE_LIMIT_INVITES: str = ""
     RATE_LIMIT_CONTACT_URL: str = (
         "mailto:muneebahmad25211@gmail.com"
         "?subject=Custom%20Lead%20Generation%20System"

@@ -29,5 +29,8 @@ async def get_rate_limit_status(
 ) -> SuccessResponse[RateLimitStatusResponse]:
     ip = get_client_ip(request)
     service = RateLimitService(db)
-    status = await service.get_status(fingerprint=fingerprint, ip=ip)
+    status = await service.get_status(
+        fingerprint=fingerprint, ip=ip,
+        access_token=request.headers.get("X-Access-Token"),
+    )
     return SuccessResponse(data=status)
