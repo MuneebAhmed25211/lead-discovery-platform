@@ -179,6 +179,16 @@ _INDUSTRY_KEYWORDS: dict[str, list[str]] = {
         # construction. Real construction companies are already reliably
         # caught by the more specific terms above.
     ],
+    # Added: commercial/residential cleaning firms had no category and were
+    # misfiled as Fitness & Wellness, Healthcare and Real Estate (confirmed
+    # live: Enviro-Master, Coverall, CCS Facility Services), so a "commercial
+    # cleaning companies" ICP could never match them.
+    "Cleaning & Janitorial Services": [
+        "janitorial", "commercial cleaning", "office cleaning", "cleaning services",
+        "maid service", "housekeeping services", "custodial", "carpet cleaning",
+        "window cleaning", "pressure washing", "disinfecting services",
+        "facility services", "cleaning company",
+    ],
     "Retail": [
         "e-commerce", "ecommerce", "retail", "online store", "shop",
         "merchandise", "product", "shopify", "woocommerce", "inventory",

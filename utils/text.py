@@ -111,7 +111,18 @@ _INDUSTRY_SYNONYMS: dict[str, frozenset[str]] = {
                               "doctor", "doctors", "hospital", "hospitals"}),
     "dental": frozenset({"dentist", "dentists", "orthodontic", "orthodontics"}),
     "accounting": frozenset({"accountant", "accountants", "cpa", "bookkeeping", "tax", "taxes"}),
-    "retail": frozenset({"store", "stores", "shop", "shops"}),
+    # Extended for e-commerce / DTC brands: an ICP target such as "online
+    # fashion retailers" or "DTC consumer goods brands" shares no literal
+    # token with the extracted label "Retail", so every real brand scored
+    # 0/25 on industry_fit ("Industry 'Retail' does not match ICP").
+    "retail": frozenset({"store", "stores", "shop", "shops",
+                          "retailer", "retailers", "ecommerce", "commerce",
+                          "dtc", "d2c", "fashion", "apparel", "clothing",
+                          "boutique", "boutiques", "homeware", "homewares",
+                          "gifts", "jewellery", "jewelry", "footwear",
+                          "accessories"}),
+    "cleaning": frozenset({"janitorial", "cleaner", "cleaners", "maid", "maids",
+                            "housekeeping", "custodial", "sanitation", "sanitizing"}),
     "construction": frozenset({
         "contractor", "contractors", "remodeling", "renovation",
         # Added: confirmed gap — ICP target phrasings for the specific
@@ -150,7 +161,9 @@ _INDUSTRY_SYNONYMS: dict[str, frozenset[str]] = {
     # taxonomy label) shares no literal token with how ICPs phrase this
     # vertical ("beauty salons and spas", "day spas", "nail salons").
     "beauty": frozenset({"salon", "salons", "spa", "spas", "cosmetic",
-                          "cosmetics", "nail", "nails", "esthetics"}),
+                          "cosmetics", "nail", "nails", "esthetics",
+                          "skincare", "haircare", "makeup", "grooming",
+                          "fragrance", "fragrances"}),
     # Same gap class as "construction"/"beauty" above — "Banking &
     # Financial Services" (the taxonomy label) shares no literal token
     # with common ICP phrasings ("financial services firms", "banks",

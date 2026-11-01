@@ -707,6 +707,46 @@ def _fails_trade_association_check(title: str, snippet: str) -> bool:
     return bool(_TRADE_ASSOCIATION_PATTERNS.search(combined))
 
 
+# Investors, accelerators, market-research/analyst sites and platform
+# vendors — organizations that sell capital, data, or software TO
+# businesses and never buy as one. Confirmed real case: a founder-led UK
+# e-commerce brand ICP returned Antler and First Round (investors), the
+# Centre for Retail Research and ECDB (research/data), and Global-e and
+# Retail Assist (e-commerce software vendors) — none a prospect. Patterns
+# are anchored to self-description phrasing (like the trade-association
+# check above) rather than bare words, so a brand that merely mentions
+# "investors" or "platform" in passing is not caught.
+_INVESTOR_RESEARCH_VENDOR_PATTERNS = re.compile(
+    r"\b("
+    # investors / accelerators
+    r"venture\s+capital(?:\s+(?:firm|fund|investor))?|"
+    r"(?:early|seed|pre-seed|growth)[-\s]stage\s+(?:investor|venture|fund|vc)s?|"
+    r"day\s+zero\s+investor|"
+    r"private\s+equity\s+(?:firm|investor)s?|"
+    r"angel\s+investors?\s+network|"
+    r"(?:we|that)\s+invests?\s+in\s+(?:early|founders|startups|the\s+next)|"
+    r"startup\s+(?:studio|builder|accelerator)|"
+    # market research / data / analyst sites
+    r"cent(?:re|er)\s+for\s+\w+\s+research|"
+    r"market\s+research\s+(?:firm|company|report|centre|center)s?|"
+    r"(?:ecommerce|e-commerce|retail)\s+(?:market\s+)?(?:database|intelligence|analytics\s+platform)|"
+    # e-commerce platform / software vendors (self-description)
+    r"(?:ecommerce|e-commerce)\s+(?:platform|software|solutions?)\b|"
+    r"(?:platform|software|solution|technology)\s+(?:that\s+)?(?:helps?|enables?|powers?|empowers?)\s+"
+    r"(?:merchants|retailers|brands|ecommerce|e-commerce)|"
+    r"cross-border\s+(?:ecommerce|e-commerce)\s+(?:platform|solutions?|enabler)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _fails_investor_research_vendor_check(title: str, snippet: str) -> bool:
+    """Reject investors, accelerators, research/data sites and platform
+    vendors detected via their own marketing language (see the pattern
+    block above for the confirmed real cases)."""
+    return bool(_INVESTOR_RESEARCH_VENDOR_PATTERNS.search(f"{title} {snippet}"))
+
+
 _ECONOMIC_DEVELOPMENT_PATTERNS = re.compile(
     r"\b("
     r"economic\s+development\s+(?:board|council|corporation|authority|"
@@ -1427,6 +1467,11 @@ def validate_candidate(url: str, title: str, domain: str, snippet: str = "") -> 
     # not an operating business in it).
     if _fails_trade_association_check(title, snippet):
         return ValidationResult(passed=False, rejection_reason="rejected_content:trade_association")
+
+    # Pass 6b: Content — investors, accelerators, research/data sites and
+    # e-commerce platform vendors (see _INVESTOR_RESEARCH_VENDOR_PATTERNS).
+    if _fails_investor_research_vendor_check(title, snippet):
+        return ValidationResult(passed=False, rejection_reason="rejected_content:investor_research_vendor")
 
     # Pass 7: Content — regional/state economic-development organizations
     # (same rationale as Pass 6, different category: a public body that

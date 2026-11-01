@@ -55,6 +55,14 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 _WIKIDATA_API = "https://www.wikidata.org/w/api.php"
+
+# Wikimedia's API policy requires a descriptive User-Agent with contact info;
+# requests with the default "python-httpx" agent are answered with 403, which
+# silently disabled this whole check (confirmed in logs: every call returned
+# "403 Forbidden", while the same request with a descriptive agent returned 200).
+from core.config import settings as _settings  # noqa: E402
+
+_WIKIDATA_HEADERS = {"User-Agent": _settings.CRAWLER_USER_AGENT, "Accept": "application/json"}
 _REQUEST_TIMEOUT = 4.0  # seconds — this must never meaningfully slow down
                         # a research run; a slow/unreachable Wikidata is
                         # "no signal," not a blocker.
@@ -168,6 +176,7 @@ async def _search_entity(client: httpx.AsyncClient, name: str) -> tuple[str, str
                 "type": "item",
             },
             timeout=_REQUEST_TIMEOUT,
+            headers=_WIKIDATA_HEADERS,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -210,6 +219,7 @@ async def _fetch_instance_of_labels(client: httpx.AsyncClient, qid: str) -> dict
                 "format": "json",
             },
             timeout=_REQUEST_TIMEOUT,
+            headers=_WIKIDATA_HEADERS,
         )
         resp.raise_for_status()
         claims_data = resp.json()
@@ -245,6 +255,7 @@ async def _fetch_instance_of_labels(client: httpx.AsyncClient, qid: str) -> dict
                 "format": "json",
             },
             timeout=_REQUEST_TIMEOUT,
+            headers=_WIKIDATA_HEADERS,
         )
         resp.raise_for_status()
         entities_data = resp.json()

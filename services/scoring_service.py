@@ -196,6 +196,71 @@ _VENDOR_DISQUALIFIER_TRIGGERS = {
 }
 
 
+
+# ── Location alignment ────────────────────────────────────────────────────────
+# Real addresses name a nation ("Manchester, England") or a state ("Austin,
+# TX"), not the country an ICP lists ("United Kingdom"), so a plain
+# substring test misses UK addresses and — worse — can never tell that a
+# US-based company is the WRONG country. Confirmed real case: Global-e
+# (US-based) surfaced under a UK-only ICP with no location penalty.
+_COUNTRY_ALIASES: dict[str, tuple[str, ...]] = {
+    "united kingdom": ("united kingdom", "uk", "u.k.", "england", "scotland",
+                       "wales", "northern ireland", "great britain", "britain"),
+    "united states": ("united states", "usa", "u.s.", "u.s.a.", "america"),
+    "ireland": ("ireland", "republic of ireland", "eire"),
+    "canada": ("canada",),
+    "australia": ("australia",),
+    "germany": ("germany",),
+    "france": ("france",),
+    "india": ("india",),
+    "israel": ("israel",),
+    "netherlands": ("netherlands",),
+    "singapore": ("singapore",),
+    "united arab emirates": ("united arab emirates", "uae", "dubai"),
+}
+
+_LOCATION_CONFLICT_PENALTY = 15
+
+
+def _alias_in(text: str, alias: str) -> bool:
+    return bool(re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", text))
+
+
+def _countries_named(loc: str) -> set[str]:
+    """Canonical countries a free-text location string clearly names."""
+    found = {c for c, aliases in _COUNTRY_ALIASES.items()
+             if any(_alias_in(loc, a) for a in aliases)}
+    # "Austin, TX"-style US address with no country word.
+    m = re.search(r",\s*([a-z]{2})\b", loc)
+    if m and m.group(1).upper() in _US_STATE_CODES and "united kingdom" not in found:
+        found.add("united states")
+    return found
+
+
+def _target_countries(target_locs: list[str]) -> set[str]:
+    out: set[str] = set()
+    for t in target_locs:
+        t = t.lower()
+        for c, aliases in _COUNTRY_ALIASES.items():
+            if any(_alias_in(t, a) for a in aliases):
+                out.add(c)
+    return out
+
+
+def location_conflict(loc: str, target_locs: list[str]) -> str | None:
+    """Name the country a company is clearly in when that country is NOT
+    among the ICP's targets; None when it matches, is unknown, or the ICP
+    has no recognised country target (never penalize on missing data)."""
+    loc = (loc or "").lower().strip()
+    targets = _target_countries(target_locs)
+    if not loc or not targets:
+        return None
+    named = _countries_named(loc)
+    if not named or named & targets:
+        return None
+    return sorted(named)[0]
+
+
 class ScoringService:
 
     def __init__(self, db: Client) -> None:
@@ -343,6 +408,8 @@ class ScoringService:
         target_locs = [l.lower() for l in icp.get("target_locations", [])]
         loc = company.get("location", "").lower()
         location_matched = bool(loc) and any(tl in loc for tl in target_locs)
+        if not location_matched and loc:
+            location_matched = bool(_countries_named(loc) & _target_countries(target_locs))
 
         # Whole-phrase substring matching misses the extremely common case
         # of a US city/state address ("Atlanta, GA") when the ICP target
@@ -567,6 +634,20 @@ class ScoringService:
         )
 
     def _compute_disqualifier_penalty(self, company, icp, ev_by_field) -> ScoreDimension:
+        """ICP-signal penalty plus a location-conflict penalty (a company
+        clearly based in a country the ICP does not target)."""
+        base = self._compute_icp_signal_penalty(company, icp, ev_by_field)
+        conflict = location_conflict(company.get("location", ""), icp.get("target_locations", []))
+        if not conflict:
+            return base
+        total = min(60, -base.score + _LOCATION_CONFLICT_PENALTY)
+        loc_reason = f"company is based in {conflict}, outside the ICP's target locations"
+        reason = (f"{base.reason}; {loc_reason}" if base.score < 0
+                  else f"Disqualifying signal(s) detected: {loc_reason}")
+        ev_ids = list(base.evidence_ids) + [e["id"] for e in ev_by_field.get("location", [])[:1]]
+        return ScoreDimension(score=-total, max_score=0, reason=reason, evidence_ids=ev_ids)
+
+    def _compute_icp_signal_penalty(self, company, icp, ev_by_field) -> ScoreDimension:
         """
         Deduct points for ICP disqualifying_signals matched in the company's
         own evidence. Returns a ScoreDimension (not a bare int) so the

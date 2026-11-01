@@ -82,7 +82,7 @@ Rule of thumb: if the service_description explicitly names who it serves (e.g. "
 Rules:
 - target_industries: 2–5 specific BUYER industries (not the seller's own industry). e.g. for "AI automation systems": "healthcare providers", "logistics companies", "manufacturing firms", "law firms" — NOT "AI companies" or "software companies"
 - target_company_sizes: use these exact ranges only: "1-10", "11-50", "51-200", "201-500", "501-1000", "1000+"
-- target_locations: 2–4 countries or regions the user can realistically serve
+- target_locations: 2–4 countries or regions the user can realistically serve. EXCEPTION: if the service_description explicitly names a country or region for the buyers (e.g. "UK ecommerce brand", "US dental clinics"), target_locations MUST contain ONLY that country/region — never add neighbouring or "similar" markets (e.g. do not add Ireland to a UK-only description), because every added location widens discovery away from what the user asked for
 - pain_points: 3–5 specific operational problems this service solves FOR THE BUYER (not problems the seller has)
 - buying_triggers: 3–5 events that make a buyer company likely to purchase now (e.g. "hiring an Operations Manager", "opened a second location", "manual process complaints in job postings")
 - positive_signals: 3–5 things to look for on a BUYER's website that indicate strong fit (e.g. signs of manual processes, no existing automation, growth signals)
@@ -113,6 +113,15 @@ Rules:
     - orthodontic practice management software contact                  (contact-style, no hiring)
     - dental chain patient portal online booking California             (operational signal, no hiring)
     - private dental group expansion new location                       (expansion, no hiring)
+  * CONSUMER-BRAND BUYERS (e-commerce, DTC, retail, fashion, beauty, homeware, food and drink, gifts, any business that sells physical products to consumers): these businesses do NOT describe themselves with words like "careers", "hiring", "challenges", "manual process", "operations", "streamline" or "SOPs" — queries built from those words surface job boards, software vendors, consultancies, research firms and articles instead of brands. Confirmed failure: a founder-led UK e-commerce ICP generated queries such as "online fashion brand hiring operations manager", "boutique consumer goods company manual order processing challenges" and "online home goods store careers"; all 11 results were investors, corporates, research sites and software vendors, and not one was a real brand. For consumer-brand buyers use AT MOST 1 hiring-style query and instead write queries in the voice of a real brand's own storefront and About page, always including the target country, for example:
+    - independent UK fashion brand founded by shop new arrivals free UK delivery
+    - small batch skincare brand UK our story founder shop now
+    - family run online homeware shop UK about us free delivery over
+    - handmade jewellery brand UK meet the maker shop
+    - sustainable clothing brand UK our story shop collection
+  * When target_locations lists several countries, SPREAD the queries across them — no more than 2 queries may name the same country, and each target country must appear in at least one query. Use that country's own place names (UK cities such as Manchester or Bristol, Canadian provinces such as Ontario, Australian states such as Victoria), not only US states. Confirmed failure: an ICP targeting the US, Canada, the UK and Australia produced five queries that named only California, Texas, New York, Florida and Illinois
+  * Every query MUST contain the target location or country name, so results are geographically relevant
+  * Never use the words "challenges", "problems", "solutions", "tips", "guide", "best", "top" or "how to" in a query — they surface articles and vendors, not buyer businesses
   * Do NOT include quotes inside queries
 - summary: One paragraph (3–4 sentences) describing the ideal BUYER customer in plain English, explicitly noting their industry and why they would need this service rather than build it themselves.
 

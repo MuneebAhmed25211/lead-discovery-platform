@@ -31,6 +31,7 @@ is skipped and recorded in CrawlResult.pages_failed.
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlparse
@@ -302,6 +303,43 @@ async def crawl_client(timeout: int | None = None):
         await client.aclose()
 
 
+
+# ── Bot-wall detection & transient-failure fallback ──────────────────────────
+# A bot challenge page is served with HTTP 200, so it passes the status check
+# and was then mined as if it were the company's own site — confirmed real case:
+# a newspaper's challenge page ("Client Challenge") surfaced as a company named
+# "Client Challenge". Treat such pages as failed fetches instead.
+_BOT_WALL_TITLE_RE = re.compile(
+    r"<title[^>]*>\s*(?:client\s+challenge|just\s+a\s+moment|attention\s+required|"
+    r"access\s+denied|pardon\s+our\s+interruption|are\s+you\s+a\s+robot|"
+    r"verify\s+you\s+are\s+(?:a\s+)?human|checking\s+your\s+browser|"
+    r"security\s+check|please\s+verify)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_bot_wall(html: str) -> bool:
+    return bool(html) and bool(_BOT_WALL_TITLE_RE.search(html[:4000]))
+
+
+def _fallback_plan(result: "CrawlResult", domain: str, website: str, timeout: int):
+    """Decide whether a fully failed crawl deserves ONE more attempt, and how.
+    Never retries robots-blocked sites, 403/bot walls, or anything else that
+    is the site's deliberate answer — only failures that are plausibly
+    transient or a host-name quirk."""
+    if result.pages_crawled or result.robots_blocked:
+        return None
+    err = (result.error or "").lower()
+    if not err:
+        return None
+    if any(k in err for k in ("getaddrinfo", "certificate", "hostname mismatch")):
+        if not domain.startswith("www."):
+            return (f"www.{domain}", f"https://www.{domain}", timeout)
+        return None
+    if "timeout" in err:
+        return (domain, website, min(25, timeout * 2))
+    return None
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def crawl_company(
@@ -346,6 +384,20 @@ async def crawl_company(
         result.error = str(exc)[:200]
         logger.warning("crawl_company_failed", domain=domain, error=result.error)
 
+    plan = _fallback_plan(result, domain, website, timeout)
+    if plan is not None:
+        fb_domain, fb_website, fb_timeout = plan
+        logger.info("crawl_fallback_attempt", domain=domain, via=fb_website, timeout=fb_timeout)
+        retry = CrawlResult(domain=domain, website=fb_website)
+        try:
+            async with make_client(fb_timeout) as fb_client:
+                fb_rp = await _fetch_robots(fb_domain, fb_client)
+                await _crawl_with_client(fb_client, fb_domain, fb_website, fb_rp, fb_timeout, retry)
+        except Exception as exc:  # fallback must never break the crawl
+            retry.error = str(exc)[:200]
+        if retry.pages_crawled:
+            result = retry
+
     logger.info(
         "crawl_complete",
         domain=domain,
@@ -383,7 +435,10 @@ async def _crawl_with_client(
         if isinstance(page, Exception):
             failure_reasons.append(f"unexpected:{str(page)[:60]}")
             continue
-        if page.ok:
+        if page.ok and _looks_like_bot_wall(page.html):
+            result.pages_failed.append(page.url)
+            failure_reasons.append("bot_challenge")
+        elif page.ok:
             result.pages.append(page)
             result.pages_crawled.append(page.url)
         else:

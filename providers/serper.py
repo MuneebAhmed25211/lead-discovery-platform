@@ -67,7 +67,10 @@ class SerperProvider(SearchProvider):
         if response.status_code == 429:
             raise SearchProviderError(self.name, "Rate limit exceeded")
         if response.status_code != 200:
-            raise SearchProviderError(self.name, f"Unexpected status code {response.status_code}")
+            raise SearchProviderError(
+                self.name,
+                f"Unexpected status code {response.status_code}: {response.text[:200]}",
+            )
 
         try:
             body = response.json()
