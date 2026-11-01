@@ -20,6 +20,7 @@ Timeout and retry behavior:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -33,10 +34,20 @@ logger = get_logger(__name__)
 
 _SERPER_URL = "https://google.serper.dev/search"
 
+# Free Serper accounts answer queries carrying "-site:" operators with
+# HTTP 400 {"message":"Query pattern not allowed for free accounts."} —
+# confirmed live: every discovery query fell through to Tavily, whose results
+# skew to articles, market-research pages and vendors rather than real shops.
+# The exclusions are only an efficiency aid (the validator rejects those
+# domains anyway), so on that specific refusal the query is retried without
+# them and the choice is remembered for the rest of the process.
+_SITE_EXCLUSION_RE = re.compile(r"\s+-site:\S+")
+
 
 class SerperProvider(SearchProvider):
 
     name = "serper"
+    _strip_exclusions = False  # flips to True after the first "pattern not allowed"
 
     def __init__(self, api_key: str | None = None, timeout: int | None = None) -> None:
         self._api_key = api_key or settings.SERPER_API_KEY
@@ -46,6 +57,8 @@ class SerperProvider(SearchProvider):
         if not self._api_key:
             raise SearchProviderError(self.name, "SERPER_API_KEY is not configured")
 
+        if SerperProvider._strip_exclusions:
+            query = _SITE_EXCLUSION_RE.sub("", query).strip()
         payload = {"q": query, "num": min(num_results, 20)}
         headers = {
             "X-API-KEY": self._api_key,
@@ -66,6 +79,14 @@ class SerperProvider(SearchProvider):
             raise SearchProviderError(self.name, f"Authentication failed (HTTP {response.status_code})")
         if response.status_code == 429:
             raise SearchProviderError(self.name, "Rate limit exceeded")
+        if (
+            response.status_code == 400
+            and "not allowed" in response.text.lower()
+            and _SITE_EXCLUSION_RE.search(query)
+        ):
+            SerperProvider._strip_exclusions = True
+            logger.warning("serper_exclusions_not_allowed_retrying_without", query=query)
+            return await self.search(_SITE_EXCLUSION_RE.sub("", query).strip(), num_results)
         if response.status_code != 200:
             raise SearchProviderError(
                 self.name,

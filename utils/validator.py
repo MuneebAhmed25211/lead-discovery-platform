@@ -730,6 +730,11 @@ _INVESTOR_RESEARCH_VENDOR_PATTERNS = re.compile(
     r"cent(?:re|er)\s+for\s+\w+\s+research|"
     r"market\s+research\s+(?:firm|company|report|centre|center)s?|"
     r"(?:ecommerce|e-commerce|retail)\s+(?:market\s+)?(?:database|intelligence|analytics\s+platform)|"
+    r"(?:consumer|market|retail)\s+(?:intelligence|insights)\s+(?:platform|firm|company|provider)|"
+    r"statistics\s+portal|"
+    r"business\s+plan\s+(?:software|templates?)|"
+    r"(?:ecommerce|e-commerce|order)?\s*fulfil?ment\s+(?:services|centre|center|provider|company|partner)|"
+    r"3pl\b|"
     # e-commerce platform / software vendors (self-description)
     r"(?:ecommerce|e-commerce)\s+(?:platform|software|solutions?)\b|"
     r"(?:platform|software|solution|technology)\s+(?:that\s+)?(?:helps?|enables?|powers?|empowers?)\s+"
