@@ -71,6 +71,12 @@ def _fails_tld_check(domain: str) -> bool:
 # Known non-company domains — directories, aggregators, socials, review sites.
 # LinkedIn is intentionally NOT here (see module docstring).
 _REJECTED_DOMAINS = frozenset({
+    # Fashion/beauty/lifestyle media, ratings sites and market-research firms
+    # confirmed leaking into consumer-brand ICP runs (a real e-commerce brand
+    # is never found at these domains).
+    "stylist.co.uk", "goodonyou.eco", "mintel.com", "statista.com",
+    "nielseniq.com", "telegraph.co.uk", "womanandhome.com",
+    "beautyindependent.com", "glossy.co", "whowhatwear.com", "elle.com",
     # Search engines
     "google.com", "bing.com", "yahoo.com", "duckduckgo.com",
     # Social media (discovery use — enrichment is separate)
@@ -731,6 +737,11 @@ _INVESTOR_RESEARCH_VENDOR_PATTERNS = re.compile(
     r"market\s+research\s+(?:firm|company|report|centre|center)s?|"
     r"(?:ecommerce|e-commerce|retail)\s+(?:market\s+)?(?:database|intelligence|analytics\s+platform)|"
     r"(?:consumer|market|retail)\s+(?:intelligence|insights)\s+(?:platform|firm|company|provider)|"
+    r"(?:consumer|market|retail)\s+(?:intelligence|insights)\s+(?:agency|consultancy)|"
+    r"brand\s+ratings?|ethical\s+(?:fashion\s+)?ratings?|"
+    r"(?:fashion|beauty|lifestyle|women\W?s)\s+(?:magazine|media\s+brand|publication)|"
+    r"get\s+the\s+latest\s+(?:fashion|beauty)\s+news|"
+    r"advertise\s+with\s+us|"
     r"statistics\s+portal|"
     r"business\s+plan\s+(?:software|templates?)|"
     r"(?:ecommerce|e-commerce|order)?\s*fulfil?ment\s+(?:services|centre|center|provider|company|partner)|"

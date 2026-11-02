@@ -120,6 +120,8 @@ Rules:
     - handmade jewellery brand UK meet the maker shop
     - sustainable clothing brand UK our story shop collection
   * When target_locations lists several countries, SPREAD the queries across them — no more than 2 queries may name the same country, and each target country must appear in at least one query. Use that country's own place names (UK cities such as Manchester or Bristol, Canadian provinces such as Ontario, Australian states such as Victoria), not only US states. Confirmed failure: an ICP targeting the US, Canada, the UK and Australia produced five queries that named only California, Texas, New York, Florida and Illinois
+  * For consumer-brand buyers, NEVER use these words in a query, because they surface trade press, analyst reports and ratings sites instead of brands: "sustainability", "report", "trends", "market", "industry", "insights", "new product launch", "launches", "news", "review", "best", "top". Confirmed failure: "UK retail ecommerce brand sustainability page shop collection" and "UK consumer goods ecommerce brand new product launch shop" returned Mintel and Good On You
+  * For consumer-brand buyers, at least THREE of the five queries must contain a small-business marker such as "independent", "small batch", "family run", "handmade", "founded by", "small business", "made in UK" or "our story", so that results favour small founder-led brands over household-name retailers
   * Every query MUST contain the target location or country name, so results are geographically relevant
   * Never use the words "challenges", "problems", "solutions", "tips", "guide", "best", "top" or "how to" in a query — they surface articles and vendors, not buyer businesses
   * Do NOT include quotes inside queries
