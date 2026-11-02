@@ -71,6 +71,10 @@ def _fails_tld_check(domain: str) -> bool:
 # Known non-company domains — directories, aggregators, socials, review sites.
 # LinkedIn is intentionally NOT here (see module docstring).
 _REJECTED_DOMAINS = frozenset({
+    # Marketplaces and ethical-lifestyle media confirmed in consumer-brand runs
+    # (marketplaces host other people's shops; none is a buyer for an SMB ICP).
+    "amazon.co.uk", "amazon.com", "ebay.co.uk", "ebay.com", "etsy.com",
+    "aliexpress.com", "temu.com", "shein.com", "thegoodtrade.com",
     # Fashion/beauty/lifestyle media, ratings sites and market-research firms
     # confirmed leaking into consumer-brand ICP runs (a real e-commerce brand
     # is never found at these domains).
@@ -1407,6 +1411,48 @@ def _fails_generic_association_check(title: str) -> bool:
     patterns.
     """
     return bool(_GENERIC_ASSOCIATION_TITLE_PATTERN.search(title))
+
+
+
+# ── Location alignment at discovery time ─────────────────────────────────────
+# A UK-only ICP still surfaced .com.au and US shops because search results are
+# not country-restricted. Country-code TLDs are a cheap, reliable signal: a
+# ".com.au" site is Australian. Generic TLDs (.com, .org, .io, .co) carry no
+# signal and are never rejected here — the scoring step handles those via the
+# company's detected location.
+_CCTLD_COUNTRY = {
+    "uk": "united kingdom", "au": "australia", "ca": "canada", "de": "germany",
+    "fr": "france", "nl": "netherlands", "es": "spain", "it": "italy",
+    "ie": "ireland", "nz": "new zealand", "in": "india", "za": "south africa",
+    "sg": "singapore", "ae": "united arab emirates", "us": "united states",
+    "se": "sweden", "no": "norway", "dk": "denmark", "pl": "poland",
+}
+_COUNTRY_NAME_ALIASES = {
+    "united kingdom": ("united kingdom", "uk", "england", "scotland", "wales", "great britain", "britain"),
+    "united states": ("united states", "usa", "us", "america"),
+    "ireland": ("ireland",),
+    "australia": ("australia",), "canada": ("canada",), "germany": ("germany",),
+    "france": ("france",), "netherlands": ("netherlands",), "new zealand": ("new zealand",),
+    "india": ("india",), "south africa": ("south africa",), "singapore": ("singapore",),
+    "united arab emirates": ("united arab emirates", "uae"),
+}
+
+
+def foreign_cctld(domain: str, target_locations: list[str]) -> bool:
+    """True when `domain` ends in a country-code TLD of a country that is NOT
+    among the ICP's recognised target countries. False when the ICP names no
+    recognised country or the TLD is generic/unknown (never reject on doubt)."""
+    targets: set[str] = set()
+    for loc in target_locations or []:
+        low = (loc or "").lower()
+        for country, aliases in _COUNTRY_NAME_ALIASES.items():
+            if any(re.search(rf"(?<![a-z]){re.escape(a)}(?![a-z])", low) for a in aliases):
+                targets.add(country)
+    if not targets:
+        return False
+    tld = (domain or "").lower().rsplit(".", 1)[-1]
+    country = _CCTLD_COUNTRY.get(tld)
+    return bool(country) and country not in targets
 
 
 def validate_candidate(url: str, title: str, domain: str, snippet: str = "") -> ValidationResult:

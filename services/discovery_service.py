@@ -44,7 +44,7 @@ from schemas.discovery import (
     SearchResult,
 )
 from utils.dedup import extract_domain, root_domain
-from utils.validator import negative_site_filters, validate_candidate
+from utils.validator import foreign_cctld, negative_site_filters, validate_candidate
 
 logger = get_logger(__name__)
 
@@ -75,6 +75,7 @@ class DiscoveryService:
         Only raises NotFoundError if icp_id doesn't exist (genuine 404).
         """
         search_queries = self._load_icp_queries(icp_id)
+        target_locations = self._load_icp_target_locations(icp_id)
 
         outcomes: list[ProviderSearchOutcome] = []
         for query in search_queries[:_MAX_QUERIES_PER_DISCOVERY]:
@@ -94,6 +95,7 @@ class DiscoveryService:
             outcomes=outcomes,
             search_id=search_id,
             icp_id=icp_id,
+            target_locations=target_locations,
         )
 
         persisted = self._persist(candidates)
@@ -121,6 +123,21 @@ class DiscoveryService:
         )
 
     # ── ICP loading ──────────────────────────────────────────────────────────
+
+    def _load_icp_target_locations(self, icp_id: str) -> list[str]:
+        """Best-effort: a failure here must never break discovery."""
+        try:
+            result = (
+                self._db.table("icps")
+                .select("target_locations")
+                .eq("id", icp_id)
+                .single()
+                .execute()
+            )
+            return list((result.data or {}).get("target_locations") or [])
+        except Exception as exc:
+            logger.warning("icp_locations_lookup_failed", icp_id=icp_id, error=str(exc))
+            return []
 
     def _load_icp_queries(self, icp_id: str) -> list[str]:
         try:
@@ -152,6 +169,7 @@ class DiscoveryService:
         outcomes: list[ProviderSearchOutcome],
         search_id: str,
         icp_id: str,
+        target_locations: list[str] | None = None,
     ) -> list[DiscoveredCompany]:
         """
         Validate each result through four passes and deduplicate by root domain.
@@ -174,6 +192,7 @@ class DiscoveryService:
                     search_id=search_id,
                     icp_id=icp_id,
                     rejection_counts=rejection_counts,
+                    target_locations=target_locations,
                 )
                 if candidate is None:
                     continue
@@ -209,6 +228,7 @@ class DiscoveryService:
         search_id: str,
         icp_id: str,
         rejection_counts: dict[str, int],
+        target_locations: list[str] | None = None,
     ) -> DiscoveredCompany | None:
         """
         Run the four-pass validation and build a DiscoveredCompany on success.
@@ -239,6 +259,11 @@ class DiscoveryService:
                 reason=validation.rejection_reason,
                 title=result.title[:60],
             )
+            return None
+
+        if foreign_cctld(domain, target_locations or []):
+            rejection_counts["rejected_location"] = rejection_counts.get("rejected_location", 0) + 1
+            logger.debug("candidate_rejected", domain=domain, reason="rejected_location:cctld")
             return None
 
         return DiscoveredCompany(
