@@ -71,6 +71,10 @@ def _fails_tld_check(domain: str) -> bool:
 # Known non-company domains — directories, aggregators, socials, review sites.
 # LinkedIn is intentionally NOT here (see module docstring).
 _REJECTED_DOMAINS = frozenset({
+    # Deals aggregators, parcel forwarders and a charity confirmed leaking into
+    # consumer-brand runs.
+    "hotukdeals.com", "pepper.com", "shipito.com", "forward2me.com",
+    "citizensadvice.org.uk",
     # Marketplaces and ethical-lifestyle media confirmed in consumer-brand runs
     # (marketplaces host other people's shops; none is a buyer for an SMB ICP).
     "amazon.co.uk", "amazon.com", "ebay.co.uk", "ebay.com", "etsy.com",
@@ -746,6 +750,9 @@ _INVESTOR_RESEARCH_VENDOR_PATTERNS = re.compile(
     r"(?:fashion|beauty|lifestyle|women\W?s)\s+(?:magazine|media\s+brand|publication)|"
     r"get\s+the\s+latest\s+(?:fashion|beauty)\s+news|"
     r"advertise\s+with\s+us|"
+    r"(?:parcel|package|mail|freight)\s+forwarding|"
+    r"deals\s+(?:community|aggregator)|hottest\s+deals|"
+    r"marketplace\s+(?:for|connecting|where)\b|"
     r"statistics\s+portal|"
     r"business\s+plan\s+(?:software|templates?)|"
     r"(?:ecommerce|e-commerce|order)?\s*fulfil?ment\s+(?:services|centre|center|provider|company|partner)|"

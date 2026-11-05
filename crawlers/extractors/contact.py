@@ -53,6 +53,10 @@ _EMAIL_RE = re.compile(
 _SKIP_EMAIL_DOMAINS = frozenset({
     "example.com", "test.com", "domain.com", "email.com",
     "sentry.io", "wixpress.com", "squarespace.com",
+    # Template placeholders left in unedited storefronts (confirmed:
+    # "info@yourstore.com" shown as a real contact on a live card).
+    "yourstore.com", "yourdomain.com", "yourcompany.com", "mydomain.com",
+    "mysite.com", "yoursite.com", "company.com", "website.com",
 })
 
 # Prefixes that suggest a generic/automated address
@@ -60,6 +64,12 @@ _GENERIC_PREFIXES = frozenset({
     "noreply", "no-reply", "donotreply", "do-not-reply",
     "notifications", "bounce", "mailer-daemon", "postmaster",
     "webmaster", "abuse", "spam",
+    # Not outreach addresses: recruiting, legal/privacy and press desks
+    # (confirmed: "careers@holly.co", "compliance@...", "media@honest.com"
+    # displayed as the contact for a prospect).
+    "careers", "jobs", "recruitment", "recruiting", "hr", "privacy",
+    "legal", "dpo", "gdpr", "accessrequests", "compliance", "press",
+    "media", "investors", "ir",
 })
 
 _MAX_EMAILS = 5
@@ -112,6 +122,20 @@ def _normalize_phone(raw: str) -> str | None:
 
     if len(digits) < 10 or len(digits) > 15:
         return None
+
+    # Unformatted digit runs without a "+" are often IDs and timestamps, not
+    # phone numbers — confirmed on live cards: "1793558859537" (a Unix
+    # timestamp), "1000180050", "97990181146". Without "+" the number must
+    # look like a real national or 00-prefixed number: UK style (leading 0,
+    # 10-11 digits), NANP (10 digits with an area code starting 2-9, or 11
+    # digits with a leading 1), or an international 00 prefix.
+    if not has_plus:
+        uk_like = digits.startswith("0") and not digits.startswith("00") and len(digits) in (10, 11)
+        nanp10 = len(digits) == 10 and digits[0] in "23456789"
+        nanp11 = len(digits) == 11 and digits[0] == "1" and digits[1] in "23456789"
+        intl00 = digits.startswith("00") and 12 <= len(digits) <= 15
+        if not (uk_like or nanp10 or nanp11 or intl00):
+            return None
 
     for pattern in _REJECTED_DIGIT_PATTERNS:
         if pattern.match(digits[-10:]):

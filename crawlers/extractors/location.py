@@ -52,7 +52,15 @@ _COUNTRY_OR_REGION_NAMES = frozenset({
 _STATE_TOKEN_PATTERN = re.compile(r"^([A-Za-z]{2,20})\b")
 
 # A city-like trailing word/phrase at the end of a text segment.
-_CITY_TOKEN_PATTERN = re.compile(r"([A-Z][a-zA-Z]{2,25})$")
+# Multi-word city names whose FIRST word is a common prefix ("New York",
+# "San Francisco", "Los Angeles", "St. Louis", "Fort Worth"). The earlier
+# single-word pattern kept only the last word, so "New York, NY" was stored as
+# "York, NY" — confirmed on real cards (Charlotte Tilbury, Who What Wear,
+# MikMak) — which then also looked like the English city of York.
+_CITY_TOKEN_PATTERN = re.compile(
+    r"((?:(?:New|San|Los|Las|Santa|Fort|Saint|St\.?|Mount|Port|El|Lake|Palm|Long|Salt|Kansas|"
+    r"North|South|East|West)\s+)?[A-Z][a-zA-Z]{2,25})$"
+)
 
 # Zip code adjacent to city/state — helps confirm it's a real address
 _ZIP_PATTERN = re.compile(r"\b\d{5}(?:-\d{4})?\b")
