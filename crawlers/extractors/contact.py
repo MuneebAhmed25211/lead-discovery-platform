@@ -93,11 +93,21 @@ _REJECTED_DIGIT_PATTERNS = (
 )
 
 
+_HELPDESK_EMAIL_DOMAINS = (
+    "zendesk.com", "freshdesk.com", "helpscoutapp.com", "intercom.io", "intercom-mail.com",
+    "gorgias.io", "kustomerapp.com", "desk.com", "myshopify.com",
+)
+
+
 def _is_useful_email(email: str) -> bool:
     """Return True if the email is worth storing."""
     email = email.lower()
     local, _, domain = email.rpartition("@")
     if domain in _SKIP_EMAIL_DOMAINS:
+        return False
+    # Helpdesk-vendor addresses such as "support@brand.zendesk.com" are a ticket
+    # inbox hosted by the vendor, not the company's own mailbox (seen on a live card).
+    if any(domain == d or domain.endswith("." + d) for d in _HELPDESK_EMAIL_DOMAINS):
         return False
     if local in _GENERIC_PREFIXES:
         return False

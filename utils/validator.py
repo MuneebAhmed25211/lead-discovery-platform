@@ -71,6 +71,10 @@ def _fails_tld_check(domain: str) -> bool:
 # Known non-company domains — directories, aggregators, socials, review sites.
 # LinkedIn is intentionally NOT here (see module docstring).
 _REJECTED_DOMAINS = frozenset({
+    # Publishing platform, startup directory, museum, marketplace, course and
+    # magazine-owned shops that surfaced in consumer-brand runs.
+    "vocal.media", "f6s.com", "moma.org", "crafters.market",
+    "ecommercemasterplan.com", "countrylivingshop.co.uk", "homesandantiques.com",
     # Deals aggregators, parcel forwarders and a charity confirmed leaking into
     # consumer-brand runs.
     "hotukdeals.com", "pepper.com", "shipito.com", "forward2me.com",
