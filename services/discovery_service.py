@@ -28,6 +28,7 @@ Pipeline:
 
 from __future__ import annotations
 
+import re
 import uuid as uuid_lib
 from datetime import datetime, timezone
 
@@ -44,7 +45,7 @@ from schemas.discovery import (
     SearchResult,
 )
 from utils.dedup import extract_domain, root_domain
-from utils.validator import foreign_cctld, negative_site_filters, validate_candidate
+from utils.validator import foreign_cctld, is_large_brand_for_icp, negative_site_filters, validate_candidate
 
 logger = get_logger(__name__)
 
@@ -76,6 +77,7 @@ class DiscoveryService:
         """
         search_queries = self._load_icp_queries(icp_id)
         target_locations = self._load_icp_target_locations(icp_id)
+        max_target_size = self._load_icp_max_size(icp_id)
 
         outcomes: list[ProviderSearchOutcome] = []
         for query in search_queries[:_MAX_QUERIES_PER_DISCOVERY]:
@@ -96,6 +98,7 @@ class DiscoveryService:
             search_id=search_id,
             icp_id=icp_id,
             target_locations=target_locations,
+            max_target_size=max_target_size,
         )
 
         persisted = self._persist(candidates)
@@ -123,6 +126,29 @@ class DiscoveryService:
         )
 
     # ── ICP loading ──────────────────────────────────────────────────────────
+
+    def _load_icp_max_size(self, icp_id: str) -> int | None:
+        """Largest employee count among the ICP's target size ranges
+        ("11-50" -> 50, "1000+" -> a very large number). None when unknown."""
+        try:
+            result = (
+                self._db.table("icps")
+                .select("target_company_sizes")
+                .eq("id", icp_id)
+                .single()
+                .execute()
+            )
+            sizes = (result.data or {}).get("target_company_sizes") or []
+            highs = []
+            for rng in sizes:
+                nums = re.findall(r"\d+", str(rng).replace(",", ""))
+                if not nums:
+                    continue
+                highs.append(100000 if str(rng).strip().endswith("+") else int(nums[-1]))
+            return max(highs) if highs else None
+        except Exception as exc:
+            logger.warning("icp_size_lookup_failed", icp_id=icp_id, error=str(exc))
+            return None
 
     def _load_icp_target_locations(self, icp_id: str) -> list[str]:
         """Best-effort: a failure here must never break discovery."""
@@ -170,6 +196,7 @@ class DiscoveryService:
         search_id: str,
         icp_id: str,
         target_locations: list[str] | None = None,
+        max_target_size: int | None = None,
     ) -> list[DiscoveredCompany]:
         """
         Validate each result through four passes and deduplicate by root domain.
@@ -193,6 +220,7 @@ class DiscoveryService:
                     icp_id=icp_id,
                     rejection_counts=rejection_counts,
                     target_locations=target_locations,
+                    max_target_size=max_target_size,
                 )
                 if candidate is None:
                     continue
@@ -229,6 +257,7 @@ class DiscoveryService:
         icp_id: str,
         rejection_counts: dict[str, int],
         target_locations: list[str] | None = None,
+        max_target_size: int | None = None,
     ) -> DiscoveredCompany | None:
         """
         Run the four-pass validation and build a DiscoveredCompany on success.
@@ -259,6 +288,11 @@ class DiscoveryService:
                 reason=validation.rejection_reason,
                 title=result.title[:60],
             )
+            return None
+
+        if is_large_brand_for_icp(domain, max_target_size):
+            rejection_counts["rejected_large_brand"] = rejection_counts.get("rejected_large_brand", 0) + 1
+            logger.debug("candidate_rejected", domain=domain, reason="rejected_large_brand")
             return None
 
         if foreign_cctld(domain, target_locations or []):

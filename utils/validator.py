@@ -1462,6 +1462,44 @@ def foreign_cctld(domain: str, target_locations: list[str]) -> bool:
     return bool(country) and country not in targets
 
 
+
+# ── Large brands, excluded only for small-company ICPs ───────────────────────
+# Household-name retailers and brands dominate generic search results for any
+# consumer-brand query and kept appearing as "Moderate fit" for a "founder-led,
+# 5-50 employees" ICP (Hobbs, The Honest Company, H&M, Lands' End, TOAST, Made,
+# Princess Polly, Charlotte Tilbury, ...). Employee counts are too unreliable
+# to filter on, so this is a curated list. It is applied ONLY when the ICP's
+# largest target company size is <= 200, so a seller who targets enterprises is
+# unaffected.
+_LARGE_BRAND_DOMAINS = frozenset({
+    "hobbs.com", "hobbs.co.uk", "honest.com", "hm.com", "hmgroup.com", "asos.com",
+    "very.co.uk", "next.co.uk", "marksandspencer.com", "johnlewis.com", "boohoo.com",
+    "prettylittlething.com", "landsend.co.uk", "landsend.com", "toa.st",
+    "princesspolly.co.uk", "princesspolly.com", "made.com", "oliverbonas.com",
+    "freepeople.com", "urbanoutfitters.com", "nordstrom.com", "nordstromrack.com",
+    "maurices.com", "windsorstore.com", "charlottetilbury.com", "itcosmetics.com",
+    "elcompanies.com", "lush.com", "sephora.com", "ulta.com", "zara.com", "uniqlo.com",
+    "gap.com", "target.com", "walmart.com", "ikea.com", "wayfair.co.uk", "wayfair.com",
+    "argos.co.uk", "debenhams.com", "houseoffraser.co.uk", "sportsdirect.com",
+    "jdsports.co.uk", "primark.com", "tkmaxx.com", "thewhitecompany.com",
+    "whitecompany.com", "unilever.com", "inditex.com", "inditexpeople.com",
+    # Research/software vendors that surfaced in the same runs
+    "kadence.com", "local.shop",
+})
+
+
+def is_large_brand_for_icp(domain: str, max_target_size: int | None) -> bool:
+    """True when the domain is a curated large brand AND the ICP targets
+    small companies (largest target size <= 200). Never rejects when the
+    ICP's size is unknown."""
+    if max_target_size is None or max_target_size > 200:
+        return False
+    d = (domain or "").lower()
+    if d.startswith("www."):
+        d = d[4:]
+    return d in _LARGE_BRAND_DOMAINS
+
+
 def validate_candidate(url: str, title: str, domain: str, snippet: str = "") -> ValidationResult:
     """
     Run all five validation passes against a single search result.

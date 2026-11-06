@@ -69,7 +69,7 @@ _GENERIC_PREFIXES = frozenset({
     # displayed as the contact for a prospect).
     "careers", "jobs", "recruitment", "recruiting", "hr", "privacy",
     "legal", "dpo", "gdpr", "accessrequests", "compliance", "press",
-    "media", "investors", "ir",
+    "media", "investors", "ir", "influencers", "influencer", "affiliates", "affiliate",
 })
 
 _MAX_EMAILS = 5
@@ -119,6 +119,11 @@ def _normalize_phone(raw: str) -> str | None:
     """
     has_plus = raw.strip().startswith("+")
     digits = re.sub(r"\D", "", raw)
+    # "+020 8877 4001" is a national number written with a stray "+" (no
+    # country code starts with 0). Treat it as national, not international,
+    # otherwise it is shown as the invalid "+02088774001" (seen on a live card).
+    if has_plus and digits.startswith("0"):
+        has_plus = False
 
     if len(digits) < 10 or len(digits) > 15:
         return None
