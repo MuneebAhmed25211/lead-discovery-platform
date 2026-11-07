@@ -1488,8 +1488,22 @@ _LARGE_BRAND_DOMAINS = frozenset({
     "jdsports.co.uk", "primark.com", "tkmaxx.com", "thewhitecompany.com",
     "whitecompany.com", "unilever.com", "inditex.com", "inditexpeople.com",
     # Research/software vendors that surfaced in the same runs
-    "kadence.com", "local.shop",
+    "kadence.com", "local.shop", "retail-systems.com",
+    # Added after production runs: large retailers/brands whose domain differed
+    # from the listed one ("theverygroup.com" vs "very.co.uk").
+    "theverygroup.com", "bedbathandbeyond.com", "crateandbarrel.com", "cb2.com",
+    "selfridges.com", "potterybarn.com", "williams-sonoma.com", "anthropologie.com",
+    "mango.com", "riverisland.com", "newlook.com", "matalan.co.uk", "tesco.com",
+    "sainsburys.co.uk", "farfetch.com", "net-a-porter.com", "mrporter.com",
+    "farmacybeauty.com", "youthtothepeople.com",
 })
+
+# Domains whose first label is long enough to be distinctive also match under
+# other TLDs (hobbs.co.uk / hobbs.com); short labels (lush, gap, made, next, very,
+# ikea) are matched on the exact domain only to avoid false hits.
+_LARGE_BRAND_SLDS = frozenset(
+    d.split(".")[0] for d in _LARGE_BRAND_DOMAINS if len(d.split(".")[0]) >= 6
+)
 
 
 def is_large_brand_for_icp(domain: str, max_target_size: int | None) -> bool:
@@ -1501,7 +1515,7 @@ def is_large_brand_for_icp(domain: str, max_target_size: int | None) -> bool:
     d = (domain or "").lower()
     if d.startswith("www."):
         d = d[4:]
-    return d in _LARGE_BRAND_DOMAINS
+    return d in _LARGE_BRAND_DOMAINS or d.split(".")[0] in _LARGE_BRAND_SLDS
 
 
 def validate_candidate(url: str, title: str, domain: str, snippet: str = "") -> ValidationResult:
